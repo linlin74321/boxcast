@@ -82,6 +82,47 @@ def break_even_chance(pred_low, pred_mid, pred_high, budget):
     return 0.5 * math.erfc(z / math.sqrt(2))
 
 
+# Franchise anchor, measured on 296 sequel pairs (1990-2019): a sequel earns a
+# median 0.86x its predecessor. Blending 35% of this anchor into the model's
+# forecast (in log terms) pulls big franchises towards their track record.
+SEQUEL_MEDIAN_LOG_RATIO = -0.154
+SEQUEL_WEIGHT = 0.35
+
+
+def apply_sequel_anchor(p, prev_revenue):
+    """Shift every forecast (worldwide, US opening, US total) towards what the
+    previous film in the series earned."""
+    p = p.copy()
+    anchor = math.log(prev_revenue) + SEQUEL_MEDIAN_LOG_RATIO
+    shift = math.exp(SEQUEL_WEIGHT * (anchor - math.log(p["pred_mid"])))
+    for col in [c for c in p.index if c.startswith(("pred_", "open_", "dom_"))]:
+        p[col] *= shift
+    return p
+
+
+@lru_cache(maxsize=None)
+def _share_curve():
+    """Typical share of lifetime gross earned after N days in release, from
+    2,800 wide releases: (days, median, slow-burner, front-loaded)."""
+    c = pd.read_csv(DATA / "curves.csv").iloc[:, 1:]
+    post = pd.read_csv(DATA / "post_release.csv")
+    opening = post["w1"] / post["lifetime"]            # share earned by first Sunday
+    days = np.r_[0, 3, 7 * np.arange(1, 21)]
+    curve = lambda q: np.r_[0, opening.quantile(q), c.quantile(q).values]
+    return days, curve(0.5), curve(0.1), curve(0.9)
+
+
+def project_in_release(gross_so_far, days_in_release):
+    """Final gross for a film still in cinemas, from what it has earned so far."""
+    days, mid, slow, fast = _share_curve()
+    d = min(max(days_in_release, 3), 140)
+    share = lambda curve: max(float(np.interp(d, days, curve)), 0.05)
+    # Slow burners have earned less of their total by now, so they end higher
+    return {"low": gross_so_far / share(fast),
+            "mid": gross_so_far / share(mid),
+            "high": gross_so_far / share(slow)}
+
+
 DRIVER_GROUPS = {
     "Budget": ["log_budget"],
     "Lead star's track record": ["star_power", "star_films"],

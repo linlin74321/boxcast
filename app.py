@@ -17,8 +17,8 @@ import streamlit as st
 
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT / "src"))
-from predict import (BREAK_EVEN_MULTIPLE, break_even_chance, explain,  # noqa: E402
-                     metrics, predict_post, predict_pre_all)
+from predict import (BREAK_EVEN_MULTIPLE, apply_sequel_anchor, break_even_chance,  # noqa: E402
+                     explain, metrics, predict_pre_all, project_in_release)
 from style import CSS  # noqa: E402
 from tmdb import TMDB, film_features, poster_url  # noqa: E402
 
@@ -213,7 +213,8 @@ def home():
     if live is not None and not live.empty:
         live = live.sort_values("popularity", ascending=False).head(12)
         items = [{"id": r.tmdb_id, "title": r.title, "poster": r.poster_path,
-                  "sub": nice_date(r.release_date), "fig": f"{money(r.pred_mid)} forecast"}
+                  "sub": nice_date(r.release_date),
+                  "fig": f"{money(r.pred_mid)} {getattr(r, 'fig_label', 'forecast')}"}
                  for r in live.itertuples()]
         sub = "Forecasts refresh every morning. Figures are worldwide lifetime gross."
     elif HAS_API:
@@ -288,6 +289,27 @@ def comparables(f, p):
             f"<th class='r'>Worldwide</th><th class='r'>Return</th></tr></thead><tbody>{rows}</tbody></table>")
 
 
+@st.cache_data(ttl=24 * 3600, show_spinner=False)
+def previous_film(movie_id, key):
+    api = TMDB(key)
+    return api.previous_installment(api.details(movie_id))
+
+
+def verdict_html(chance):
+    if chance is None:
+        return '<div class="v">—</div><div class="s">No budget listed on TMDB</div>'
+    cls, word, icon = (("bc-good", "Likely profitable", "✓") if chance >= 0.6 else
+                       ("bc-warn", "Could go either way", "≈") if chance >= 0.35 else
+                       ("bc-risk", "Risky", "!"))
+    shown = ">99%" if chance > 0.99 else "<1%" if chance < 0.01 else f"{chance * 100:.0f}%"
+    return (f'<div class="v">{shown}</div>'
+            f'<div class="s"><span class="{cls}">{icon} {word}</span></div>')
+
+
+def fig(k, v, sub=""):
+    return f'<div class="bc-fig"><div class="k">{k}</div><div class="v">{v}</div><div class="s">{sub}</div></div>'
+
+
 def film_page(movie_id):
     st.button("Back to search", key="back", on_click=go_home)
     if not HAS_API:
@@ -306,11 +328,27 @@ def film_page(movie_id):
     row = pd.DataFrame([f])
     p = predict_pre_all(row).iloc[0]
     base, drivers = explain(row)
-    be = BREAK_EVEN_MULTIPLE * f["budget"] if pd.notna(f["budget"]) else None
-    chance = break_even_chance(p["pred_low"], p["pred_mid"], p["pred_high"], f["budget"])
+    try:
+        prev = previous_film(movie_id, KEY)
+    except Exception:
+        prev = None
+    if prev:
+        p = apply_sequel_anchor(p, prev["revenue"])
+    budget = f["budget"] if pd.notna(f["budget"]) else None
+    be = BREAK_EVEN_MULTIPLE * budget if budget else None
+
+    # ---- which situation is the film in?
+    rel = pd.Timestamp(f["release_date"])
+    days_out = (pd.Timestamp(date.today()) - rel).days
+    revenue = f["revenue"] if pd.notna(f["revenue"]) and f["revenue"] > 0 else None
+    if revenue and days_out >= 100:
+        mode = "final"
+    elif revenue and days_out >= 0:
+        mode = "running"
+    else:
+        mode = "forecast"
 
     # ---- header with backdrop
-    rel = pd.Timestamp(f["release_date"])
     chips = [str(rel.year)]
     if f.get("certification"):
         chips.append(f["certification"])
@@ -338,131 +376,140 @@ def film_page(movie_id):
       </div>
     </div>""")
 
-    # ---- the forecast
-    st.html(f"""
-    <div class="bc-fc">
-      <div class="bc-fc-k">Forecast worldwide box office</div>
-      <div class="bc-fc-n">{money(p['pred_mid'])}</div>
-      <div class="bc-fc-r">Likely between {money(p['pred_low'])} and {money(p['pred_high'])}</div>
-      {track_html(p['pred_low'], p['pred_mid'], p['pred_high'], be)}
-    </div>""")
-
-    if chance is None:
-        verdict = ('<div class="v">—</div><div class="s">No budget listed on TMDB</div>')
+    # ---- the headline number
+    if mode == "final":
+        ratio = revenue / budget if budget else None
+        st.html(f"""<div class="bc-fc">
+          <div class="bc-fc-k">Final worldwide box office</div>
+          <div class="bc-fc-n">{money(revenue)}</div>
+          <div class="bc-fc-r">Released {nice_date(rel)}. This film has finished its cinema run.</div>
+        </div>""")
+        if ratio:
+            cls, word = (("bc-good", "✓ Profitable") if ratio >= BREAK_EVEN_MULTIPLE else
+                         ("bc-warn", "≈ Roughly broke even") if ratio >= 1.8 else
+                         ("bc-risk", "! Likely lost money"))
+            verdict = fig("Result", f"{ratio:.1f}×", f'<span class="{cls}">{word}</span> on a {money(budget)} budget')
+        else:
+            verdict = fig("Result", "—", "No budget listed on TMDB")
+        off = (p["pred_mid"] - revenue) / revenue * 100
+        st.html(f"""<div class="bc-figs">
+          {fig("Budget", money(budget), "Production budget, per TMDB")}
+          {verdict}
+          {fig("BoxCast's pre-release forecast", money(p['pred_mid']),
+               f"{abs(off):.0f}% {'above' if off > 0 else 'below'} the final result")}
+        </div>""")
+        if rel.year <= 2019:
+            note("This film is part of the data the model learned from, so its pre-release forecast "
+                 "is a sanity check rather than a fair test.")
+    elif mode == "running":
+        proj = project_in_release(revenue, days_out)
+        chance = break_even_chance(proj["low"], proj["mid"], proj["high"], budget)
+        st.html(f"""<div class="bc-fc">
+          <div class="bc-fc-k">Projected final worldwide box office</div>
+          <div class="bc-fc-n">{money(proj['mid'])}</div>
+          <div class="bc-fc-r">Likely between {money(proj['low'])} and {money(proj['high'])}</div>
+          {track_html(proj['low'], proj['mid'], proj['high'], be)}
+        </div>""")
+        st.html(f"""<div class="bc-figs">
+          {fig("Earned so far", money(revenue), f"Day {days_out + 1} in cinemas, per TMDB")}
+          {fig("Pre-release forecast", money(p['pred_mid']), "Before any tickets were sold")}
+          <div class="bc-fig"><div class="k">Chance to break even</div>{verdict_html(chance)}</div>
+        </div>""")
+        note("In cinemas now. The projection uses the latest worldwide total reported on TMDB and "
+             "how films typically earn over their run. It sharpens every week.")
     else:
-        cls, word, icon = (("bc-good", "Likely profitable", "✓") if chance >= 0.6 else
-                           ("bc-warn", "Could go either way", "≈") if chance >= 0.35 else
-                           ("bc-risk", "Risky", "!"))
-        verdict = (f'<div class="v">{chance * 100:.0f}%</div>'
-                   f'<div class="s"><span class="{cls}">{icon} {word}</span> on a {money(f["budget"])} budget</div>')
-    st.html(f"""
-    <div class="bc-figs">
-      <div class="bc-fig"><div class="k">US opening weekend</div>
-        <div class="v">{money(p['open_mid'])}</div>
-        <div class="s">{money(p['open_low'])} to {money(p['open_high'])}</div></div>
-      <div class="bc-fig"><div class="k">US and Canada total</div>
-        <div class="v">{money(p['dom_mid'])}</div>
-        <div class="s">{money(p['dom_low'])} to {money(p['dom_high'])}</div></div>
-      <div class="bc-fig"><div class="k">Chance to break even</div>{verdict}</div>
-    </div>""")
-
-    today = pd.Timestamp(date.today())
-    if rel <= today and pd.notna(f["revenue"]) and f["revenue"] > 0:
-        diff = (p["pred_mid"] - f["revenue"]) / f["revenue"] * 100
-        extra = (" This film is part of the data the model learned from, so treat this as a sanity "
-                 "check rather than a fair test." if rel.year <= 2019 else "")
-        note(f"Released {nice_date(rel)}. TMDB reports <b>{money(f['revenue'])}</b> worldwide so far. "
-             f"Our forecast is {abs(diff):.0f}% {'above' if diff > 0 else 'below'} that.{extra}")
-    elif rel <= today:
-        note(f"In cinemas since {nice_date(rel)}. Once the opening weekend is reported, use "
-             "<b>Refine with real box office</b> below for a much sharper US forecast.")
-    else:
-        note(f"Opens in US cinemas on {nice_date(rel)}.")
-    if pd.isna(f["budget"]):
-        note("TMDB doesn't list a budget for this film, so the forecast leans on its genre, cast, "
-             "director and timing, and the range is wider.")
+        chance = break_even_chance(p["pred_low"], p["pred_mid"], p["pred_high"], budget)
+        st.html(f"""<div class="bc-fc">
+          <div class="bc-fc-k">Forecast worldwide box office</div>
+          <div class="bc-fc-n">{money(p['pred_mid'])}</div>
+          <div class="bc-fc-r">Likely between {money(p['pred_low'])} and {money(p['pred_high'])}</div>
+          {track_html(p['pred_low'], p['pred_mid'], p['pred_high'], be)}
+        </div>""")
+        st.html(f"""<div class="bc-figs">
+          {fig("US opening weekend", money(p['open_mid']), f"{money(p['open_low'])} to {money(p['open_high'])}")}
+          {fig("US and Canada total", money(p['dom_mid']), f"{money(p['dom_low'])} to {money(p['dom_high'])}")}
+          <div class="bc-fig"><div class="k">Chance to break even</div>{verdict_html(chance)}</div>
+        </div>""")
+        if days_out >= 0:
+            note(f"In cinemas since {nice_date(rel)}, but TMDB hasn't reported its box office yet. "
+                 "Until it does, this is the pre-release forecast.")
+        else:
+            note(f"Opens in US cinemas on {nice_date(rel)}. Pre-release forecasts are the hardest kind; "
+                 "the range shows how far the real result could reasonably land.")
+        if not budget:
+            note("TMDB doesn't list a budget for this film, so the forecast leans on its genre, cast, "
+                 "director and timing, and the range is wider.")
 
     # ---- why
-    st.html(f'<div class="bc-section">Why this number</div>'
+    prev_line = ""
+    if prev:
+        prev_line = (f'<div class="bc-drv"><div class="n">Previous film in the series</div>'
+                     f'<div class="b"></div><div class="v">{money(prev["revenue"])}</div></div>'
+                     f'<div class="bc-sub" style="margin:.4rem 0 0">{esc(prev["title"])} ({prev["year"]}). '
+                     f'Sequels typically earn about 0.86× their predecessor, and the forecast leans '
+                     f'towards that.</div>')
+    heading = "Why this number" if mode == "forecast" else "What the pre-release model saw"
+    st.html(f'<div class="bc-section">{heading}</div>'
             f'<div class="bc-sub">A typical film in our data earns {money(base)} worldwide. '
-            f'Here\u2019s what moves this one up or down from there.</div>{drivers_html(drivers)}')
+            f'Here\u2019s what moves this one up or down from there.</div>{drivers_html(drivers)}{prev_line}')
 
     # ---- comparables
     st.html('<div class="bc-section">Films like this</div>'
             '<div class="bc-sub">Same genre, closest budget. Worldwide lifetime gross.</div>'
             + comparables(f, p))
 
-    # ---- refine with real numbers
-    st.html('<div class="bc-section">Refine with real box office</div>'
-            '<div class="bc-sub">Once the film opens, enter its weekend grosses. '
-            'Typical error drops from about 45% to under 10% by the second weekend.</div>')
-    with st.form(f"refine_{movie_id}", border=True):
-        a, b, c, e = st.columns(4)
-        w1 = a.number_input("Opening weekend ($M)", 0.0, 500.0, 0.0, 1.0)
-        th = b.number_input("Opening theaters", 0, 5000, 3500, 50)
-        w2 = c.number_input("2nd weekend ($M)", 0.0, 500.0, 0.0, 1.0)
-        w3 = e.number_input("3rd weekend ($M)", 0.0, 500.0, 0.0, 1.0)
-        submitted = st.form_submit_button("Refine forecast")
-    if submitted and w1 > 0:
-        w2v = w2 * 1e6 if w2 > 0 else None
-        w3v = w3 * 1e6 if (w3 > 0 and w2v) else None
-        r = predict_post(w1 * 1e6, max(th, 1000), rel, w2v, w3v, int(f["studio"] != "Other"))
-        err = metrics()["post_release"][f"after_weekend_{r['k']}"]["median_abs_pct_error"]
-        st.html(f"""<div class="bc-figs">
-          <div class="bc-fig"><div class="k">US and Canada total, refined</div>
-            <div class="v">{money(r['mid'])}</div>
-            <div class="s">{money(r['low'])} to {money(r['high'])}</div></div>
-          <div class="bc-fig"><div class="k">Multiplier</div>
-            <div class="v">{r['multiplier']:.2f}×</div><div class="s">lifetime ÷ opening weekend</div></div>
-          <div class="bc-fig"><div class="k">Typical error at this stage</div>
-            <div class="v">±{err:.0f}%</div><div class="s">on films the model never saw</div></div>
-        </div>""")
-    elif submitted:
-        note("Enter the opening weekend gross to refine the forecast.")
-
 
 # ------------------------------------------------------------------ about
 def about():
     M = metrics()
-    pre, us, post = M["pre_release"], M["pre_release_us"], M["post_release"]
-    stages = [("Before release", pre["median_abs_pct_error"], pre["baseline_budget_only_median_abs_pct_error"])]
-    stages += [(f"After weekend {k}", post[f"after_weekend_{k}"]["median_abs_pct_error"],
-                post[f"after_weekend_{k}"]["baseline_typical_multiplier_median_abs_pct_error"]) for k in (1, 2, 3)]
-    top = max(max(s[1], s[2]) for s in stages)
+    pre, us, live = M["pre_release"], M["pre_release_us"], M["in_release_projection"]
+    e = live["median_abs_pct_error"]
+    stages = [("Before release", pre["median_abs_pct_error"]),
+              ("After opening weekend", e["after_opening_weekend"]),
+              ("After 1 week", e["after_week_1"]),
+              ("After 2 weeks", e["after_week_2"]),
+              ("After 3 weeks", e["after_week_3"])]
+    top = max(v for _, v in stages)
     rows = "".join(f"""<div class="row"><div>{s}</div>
-        <div><div class="bar" style="width:{v / top * 100:.0f}%" title="BoxCast: {v}%"></div>
-        <div class="base" style="width:{b / top * 100:.0f}%" title="Rule of thumb: {b}%"></div></div>
-        <div style="text-align:right;font-weight:650">{v:.0f}%</div></div>""" for s, v, b in stages)
+        <div><div class="bar" style="width:{v / top * 100:.0f}%" title="{s}: {v}% typical error"></div></div>
+        <div style="text-align:right;font-weight:650">{v:.0f}%</div></div>""" for s, v in stages)
     st.html(f"""
     <div class="bc-hero"><h1>How BoxCast works</h1>
-    <p>Two kinds of forecast: one before a film opens, and a sharper one once its
-    weekend grosses come in.</p></div>
+    <p>Search a film and BoxCast picks the right method for where it is in its life:
+    a forecast before release, a projection while it's in cinemas, and the real total
+    once it has finished.</p></div>
     <div class="bc-section">Typical forecast error on films the model never saw</div>
-    <div class="bc-sub">Thick bar: BoxCast. Thin bar: a simple rule of thumb (budget alone before
-    release; a typical multiple of the opening weekend after). Lower is better.</div>
+    <div class="bc-sub">Median gap between the forecast and the final total. Lower is better.
+    The number tightens fast once real ticket sales exist.</div>
     <div class="bc-funnel">{rows}</div>
     <div class="bc-prose">
       <h3>Before release</h3>
-      <p>The forecast learns from {len(load("pre_release.csv")):,} US releases from 1990 to 2019: budget,
-      genre, age rating, runtime, release timing, studio, whether it's a sequel, and the past
-      box office of the lead star and director. It predicts worldwide gross, plus the US
-      opening weekend (typical error {us['opening_weekend']['median_abs_pct_error']:.0f}%) and
-      US total ({us['domestic_total']['median_abs_pct_error']:.0f}%).</p>
-      <p>Before a film opens nobody knows whether audiences will love it, so every forecast
-      comes with a range. That range contained the real result about 80% of the time in
-      testing.</p>
-      <h3>After it opens</h3>
-      <p>Using daily box office for 2,800 wide releases since 2000, BoxCast learns how many times
-      its opening weekend a film goes on to earn. The drop from the first to the second weekend
-      is the strongest signal of word of mouth. After two weekends, 93% of forecasts landed
-      within 25% of the final total.</p>
+      <p>The forecast learns from {len(load("pre_release.csv")):,} US releases from 1990 to 2019:
+      budget, genre, age rating, runtime, release timing, studio, whether it's a sequel, and the
+      past box office of the lead star and director. For sequels it also leans on what the
+      previous film in the series earned. It predicts worldwide gross, plus the US opening
+      weekend (typical error {us['opening_weekend']['median_abs_pct_error']:.0f}%) and US total
+      ({us['domestic_total']['median_abs_pct_error']:.0f}%).</p>
+      <p>Before a film opens nobody knows whether audiences will love it, so this is the hardest
+      forecast to make. Every forecast comes with a range, and in testing that range contained
+      the real result about 80% of the time.</p>
+      <h3>While it's in cinemas</h3>
+      <p>BoxCast takes the latest worldwide total reported on TMDB and projects the final number
+      from how 2,800 wide releases since 2000 typically earned over
+      their run. No numbers to enter. After three weeks the typical error is about
+      {e['after_week_3']:.0f}%.</p>
+      <h3>After it's finished</h3>
+      <p>You see the actual worldwide total, its return on budget, and how BoxCast's
+      pre-release forecast compared.</p>
       <h3>The technique</h3>
       <p>Gradient-boosted decision trees (LightGBM) trained to predict a low, likely and high
       outcome, with the range calibrated on recent films so it stays honest. "Why this number"
       breaks each forecast into the contribution of each factor.</p>
       <h3>Limits</h3>
       <p>Figures aren't adjusted for inflation, the pre-release training data ends in 2019,
-      and marketing spend, trailer buzz and reviews aren't included yet.</p>
+      international hits driven by one market (such as China) are hard to foresee, and
+      marketing spend, trailer buzz and reviews aren't included yet. Box office totals come
+      from TMDB and can lag by a few days.</p>
     </div>""")
 
 

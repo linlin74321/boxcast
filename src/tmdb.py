@@ -53,6 +53,8 @@ class TMDB:
         if path == "/search/movie":
             q = extra.get("query", "").lower()
             return {"results": [m for m in f["movies"].values() if q in m["title"].lower()]}
+        if path.startswith("/collection/"):
+            return f["collections"][path.split("/")[-1]]
         if path in ("/movie/now_playing", "/movie/upcoming"):
             return {"results": [f["movies"][i] for i in f["lists"][path]], "total_pages": 1}
         return f["movies"][path.split("/")[-1]]
@@ -67,6 +69,22 @@ class TMDB:
     def details(self, movie_id):
         return self.get(f"/movie/{movie_id}",
                         append_to_response="credits,release_dates,similar")
+
+    def previous_installment(self, details):
+        """The most recent earlier film in the same TMDB collection (franchise),
+        with its worldwide revenue. None if it isn't part of a series."""
+        coll = details.get("belongs_to_collection")
+        if not coll or not details.get("release_date"):
+            return None
+        parts = self.get(f"/collection/{coll['id']}").get("parts", [])
+        earlier = [p for p in parts if p.get("id") != details["id"] and p.get("release_date")
+                   and p["release_date"] < details["release_date"]]
+        for part in sorted(earlier, key=lambda p: p["release_date"], reverse=True):
+            d = self.get(f"/movie/{part['id']}")
+            if (d.get("revenue") or 0) > 1_000_000:
+                return {"title": d.get("title"), "year": d["release_date"][:4],
+                        "revenue": d["revenue"]}
+        return None
 
     def listing(self, which, pages=1):
         out = []

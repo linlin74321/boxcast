@@ -16,7 +16,7 @@ import pandas as pd
 import requests
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from predict import predict_pre_all  # noqa: E402
+from predict import apply_sequel_anchor, predict_pre_all, project_in_release  # noqa: E402
 from tmdb import TMDB, film_features  # noqa: E402
 
 DATA = Path(__file__).resolve().parents[1] / "data"
@@ -29,16 +29,40 @@ def run(key):
         for f in api.listing(which, pages=4):
             films.setdefault(f["id"], status)
 
-    rows = []
+    rows, prevs = [], {}
     for tmdb_id, status in films.items():
         try:
-            rows.append(film_features(api.details(tmdb_id), status))
+            d = api.details(tmdb_id)
+            rows.append(film_features(d, status))
         except requests.HTTPError as e:
             print(f"skipped {tmdb_id}: {e}")
+            continue
+        try:                    # franchise lookup is a bonus; never let it stop the run
+            prev = api.previous_installment(d)
+            if prev:
+                prevs[tmdb_id] = prev["revenue"]
+        except Exception as e:
+            print(f"no franchise info for {tmdb_id}: {e}")
         time.sleep(0.05)
 
-    live = pd.DataFrame(rows).dropna(subset=["release_date"])
-    live = live.join(predict_pre_all(live))
+    live = pd.DataFrame(rows).dropna(subset=["release_date"]).reset_index(drop=True)
+    preds = predict_pre_all(live)
+    # Same logic as the film page: lean sequels towards their franchise, and
+    # for films already earning, project the final total from earnings so far.
+    today = pd.Timestamp(date.today())
+    labels = []
+    for i, r in live.iterrows():
+        if r["tmdb_id"] in prevs:
+            preds.loc[i] = apply_sequel_anchor(preds.loc[i], prevs[r["tmdb_id"]])
+        days_out = (today - pd.Timestamp(r["release_date"])).days
+        if pd.notna(r["revenue"]) and r["revenue"] > 0 and days_out >= 0:
+            proj = project_in_release(r["revenue"], days_out)
+            preds.loc[i, ["pred_low", "pred_mid", "pred_high"]] = [proj["low"], proj["mid"], proj["high"]]
+            labels.append("projected")
+        else:
+            labels.append("forecast")
+    live = live.join(preds)
+    live["fig_label"] = labels
     live["updated_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     live = live.sort_values("popularity", ascending=False)
     live.to_csv(DATA / "live_forecasts.csv", index=False)

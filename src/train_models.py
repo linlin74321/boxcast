@@ -166,6 +166,23 @@ def train_post():
     return results, importances
 
 
+def eval_in_release():
+    """Accuracy of projecting a film's final total from its earnings so far,
+    using the typical earning curve of older films (tested on Jul 2022 - Aug 2024)."""
+    c = pd.read_csv(DATA / "curves.csv")
+    p = pd.read_csv(DATA / "post_release.csv", parse_dates=["release_date"])
+    d = p.merge(c, on="film_id")
+    d["open_share"] = d["w1"] / d["lifetime"]
+    split = pd.Timestamp("2022-07-01")
+    train, test = d[d["release_date"] < split], d[d["release_date"] >= split]
+    errs = {}
+    for label, col in (("after_opening_weekend", "open_share"), ("after_week_1", "wk1"),
+                       ("after_week_2", "wk2"), ("after_week_3", "wk3")):
+        errs[label] = round(float(np.median(np.abs(test[col] / train[col].median() - 1))) * 100, 1)
+    return {"test_period": "Jul 2022 - Aug 2024", "films_tested": int(len(test)),
+            "median_abs_pct_error": errs}
+
+
 if __name__ == "__main__":
     pre_metrics, pre_imp = train_pre()
     post_metrics, post_imp = train_post()
@@ -177,6 +194,7 @@ if __name__ == "__main__":
                            "opening_weekend": us_metrics["open"], "domestic_total": us_metrics["dom"]},
         "post_release": {"test_period": "films released Jul 2022 - Aug 2024 (trained on 2000-Jun 2022)",
                          "target": "domestic (US+Canada) lifetime gross", **post_metrics},
+        "in_release_projection": eval_in_release(),
         "importance": {"pre_release": pre_imp, "post_release": post_imp},
     }
     (MODELS / "metrics.json").write_text(json.dumps(report, indent=2))

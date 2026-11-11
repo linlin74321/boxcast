@@ -1,8 +1,9 @@
 # 🎬 BoxCast: Hollywood Box Office Forecaster
 
-Type a film title and get its box office forecast: worldwide total, US opening
-weekend, US total, chance to break even, and what's driving the number. Once a film
-opens, enter its weekend grosses for a much sharper forecast.
+Type a film title and click it. Upcoming films get a forecast (worldwide total, US
+opening weekend, US total, chance to break even, and what's driving the number).
+Films in cinemas get a projected final total from what they've earned so far.
+Finished films show their actual box office and how the forecast compared.
 
 ---
 

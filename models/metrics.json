@@ -61,6 +61,16 @@
       "baseline_typical_multiplier_median_abs_pct_error": 18.0
     }
   },
+  "in_release_projection": {
+    "test_period": "Jul 2022 - Aug 2024",
+    "films_tested": 249,
+    "median_abs_pct_error": {
+      "after_opening_weekend": 20.4,
+      "after_week_1": 17.8,
+      "after_week_2": 14.2,
+      "after_week_3": 10.1
+    }
+  },
   "importance": {
     "pre_release": {
       "log_budget": 0.4142,
