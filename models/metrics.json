@@ -3,18 +3,23 @@
   "pre_release": {
     "target": "worldwide lifetime gross",
     "films_tested": 1201,
-    "median_abs_pct_error": 60.4,
-    "within_25pct": 18.1,
-    "within_50pct": 40.9,
-    "range_coverage": 83.9,
-    "range_widen_log": 0.2305,
+    "median_abs_pct_error": 55.9,
+    "within_25pct": 20.6,
+    "within_50pct": 43.7,
+    "range_coverage": 83.2,
+    "range_widen_log": 0.2516,
     "test_period": "films released 2022 onwards (trained on 1990-2021)",
     "baseline_budget_only_median_abs_pct_error": 66.7,
-    "sequels_median_abs_pct_error": 50.8,
-    "buzz_films_error_by_days_before_release": {},
+    "sequels_median_abs_pct_error": 48.6,
+    "buzz_films_error_by_days_before_release": {
+      "7_days_before": 56.1,
+      "30_days_before": 55.3,
+      "60_days_before": 55.9,
+      "90_days_before": 56.4
+    },
     "feature_comparison": {
       "without_new_signals": 61.7,
-      "with_new_signals": 60.4,
+      "with_new_signals": 55.9,
       "signals_tested": [
         "china_release",
         "competition_big",
@@ -28,41 +33,41 @@
     "test_period": "films released 2022 onwards (trained on 1990-2021)",
     "opening_weekend": {
       "films_tested": 250,
-      "median_abs_pct_error": 53.5,
-      "within_25pct": 19.2,
-      "within_50pct": 46.0,
-      "range_coverage": 80.4,
-      "range_widen_log": 0.262
+      "median_abs_pct_error": 51.8,
+      "within_25pct": 20.8,
+      "within_50pct": 48.8,
+      "range_coverage": 77.6,
+      "range_widen_log": 0.1949
     },
     "domestic_total": {
       "films_tested": 250,
-      "median_abs_pct_error": 59.2,
-      "within_25pct": 18.0,
-      "within_50pct": 38.0,
-      "range_coverage": 78.8,
-      "range_widen_log": 0.2966
+      "median_abs_pct_error": 57.6,
+      "within_25pct": 18.8,
+      "within_50pct": 41.6,
+      "range_coverage": 77.6,
+      "range_widen_log": 0.2928
     }
   },
   "importance": {
     "pre_release": {
-      "log_budget": 0.4047,
-      "director_power": 0.0817,
-      "year": 0.0804,
-      "log_prev_gross": 0.0777,
-      "studio": 0.0704,
-      "star_power": 0.0633,
-      "runtime": 0.05,
-      "star_films": 0.0282,
+      "log_budget": 0.4003,
+      "log_prev_gross": 0.0787,
+      "director_power": 0.0779,
+      "year": 0.0737,
+      "studio": 0.0678,
+      "star_power": 0.0665,
+      "runtime": 0.051,
+      "genre": 0.0286,
       "china_release": 0.0275,
-      "month": 0.0274,
-      "genre": 0.0254,
-      "director_films": 0.0171,
-      "rating": 0.0164,
-      "competition_big": 0.0162,
-      "franchise_n": 0.0093,
-      "is_sequel": 0.0037,
-      "log_wiki_views": 0.0006,
-      "wiki_days_before": 0.0
+      "month": 0.0266,
+      "star_films": 0.0251,
+      "log_wiki_views": 0.0174,
+      "rating": 0.0171,
+      "director_films": 0.0155,
+      "competition_big": 0.0139,
+      "franchise_n": 0.0078,
+      "is_sequel": 0.0029,
+      "wiki_days_before": 0.0018
     },
     "post_release": {
       "after_weekend_1": {
