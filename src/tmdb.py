@@ -53,6 +53,8 @@ class TMDB:
         if path == "/search/movie":
             q = extra.get("query", "").lower()
             return {"results": [m for m in f["movies"].values() if q in m["title"].lower()]}
+        if path == "/discover/movie":
+            return {"results": [f["movies"][i] for i in f.get("discover", [])], "total_pages": 1}
         if path.startswith("/collection/"):
             return f["collections"][path.split("/")[-1]]
         if path in ("/movie/now_playing", "/movie/upcoming"):
@@ -83,7 +85,7 @@ class TMDB:
             d = self.get(f"/movie/{part['id']}")
             if (d.get("revenue") or 0) > 1_000_000:
                 return {"title": d.get("title"), "year": d["release_date"][:4],
-                        "revenue": d["revenue"]}
+                        "revenue": d["revenue"], "count": len(earlier)}
         return None
 
     def listing(self, which, pages=1):
@@ -157,4 +159,6 @@ def film_features(details, status=None):
         "backdrop_path": details.get("backdrop_path"),
         "overview": details.get("overview"),
         "tagline": details.get("tagline"),
+        "log_prev_gross": np.nan,     # filled in when the previous film is known
+        "franchise_n": 0,
     }

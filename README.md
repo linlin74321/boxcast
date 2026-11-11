@@ -75,6 +75,17 @@ After about 2 minutes you'll see a green tick ✅.
 Open your Streamlit app: the **In cinemas and coming soon** strip now shows forecasts.
 From now on it updates **every morning at about 7:47 AM India time**, automatically.
 
+### Step 6: Retrain the model with recent films (once, about 30–60 minutes)
+This teaches the model 2020–2025 releases and every film's franchise history.
+1. Make sure your TMDB key is saved in **GitHub → Settings → Secrets and variables → Actions**
+   as `TMDB_API_KEY` (Step 5b).
+2. Open the **Actions** tab, pick **Retrain models**, then **Run workflow → Run workflow**.
+3. Wait for the green tick. The app picks up the new models automatically.
+
+There's a built-in safety check: the new pre-release model only replaces the current one if
+it's more accurate on recent films it never saw. Re-run it every few months to keep it fresh;
+later runs are faster because fetched data is saved.
+
 ---
 
 ## If something goes wrong
@@ -86,6 +97,7 @@ From now on it updates **every morning at about 7:47 AM India time**, automatica
 | Search says it isn't switched on | Add the key in Streamlit Secrets (Step 4b). |
 | "TMDB didn't respond" | The key in Streamlit Secrets is wrong or has extra spaces. Paste it again. |
 | Coming-soon strip still empty after a green tick | In Streamlit, click **⋮ → Reboot app**. |
+| Retrain says "SAFETY CHECK ... Keeping the current models" | Nothing's broken: the new model wasn't more accurate, so the old one stays. |
 | Action stopped running after a few weeks | GitHub pauses schedules in quiet repositories. Go to Actions → Daily update → **Enable workflow**. |
 
 ---
@@ -101,6 +113,7 @@ src/predict.py             loads the models and makes forecasts
 src/tmdb.py                talks to TMDB (title search, film details)
 src/style.py               the look: colours, fonts, layout
 src/fetch_tmdb.py          the daily update (TMDB → forecasts)
+src/enrich_tmdb.py         fetches franchise history and 2020+ films (Retrain workflow)
 static/fonts/              the Archivo font (open licence, OFL)
 data/                      training tables, test results, live forecasts
 models/                    the trained models + metrics.json (accuracy numbers)
@@ -113,6 +126,8 @@ Not needed: trained models are already included. If you ever want to retrain
 (for example in Google Colab), run:
 ```
 pip install -r requirements.txt
+python src/build_datasets.py
+TMDB_API_KEY=your-key python src/enrich_tmdb.py   # optional: franchise history + recent films
 python src/build_datasets.py
 python src/train_models.py
 ```

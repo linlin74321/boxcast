@@ -325,13 +325,17 @@ def film_page(movie_id):
         note(f"TMDB has no release date for <b>{esc(f['title'])}</b> yet, so it can't be forecast. "
              "Check back once a date is announced.")
         return
-    row = pd.DataFrame([f])
-    p = predict_pre_all(row).iloc[0]
-    base, drivers = explain(row)
     try:
         prev = previous_film(movie_id, KEY)
     except Exception:
         prev = None
+    if prev:
+        f["log_prev_gross"] = math.log(prev["revenue"])
+        f["franchise_n"] = prev.get("count", 1)
+        f["is_sequel"] = 1
+    row = pd.DataFrame([f])
+    p = predict_pre_all(row).iloc[0]
+    base, drivers = explain(row)
     if prev:
         p = apply_sequel_anchor(p, prev["revenue"])
     budget = f["budget"] if pd.notna(f["budget"]) else None
@@ -442,16 +446,19 @@ def film_page(movie_id):
 
     # ---- why
     prev_line = ""
-    if prev:
+    if prev and not any(d[0] == "Previous film in the series" for d in drivers):
         prev_line = (f'<div class="bc-drv"><div class="n">Previous film in the series</div>'
                      f'<div class="b"></div><div class="v">{money(prev["revenue"])}</div></div>'
                      f'<div class="bc-sub" style="margin:.4rem 0 0">{esc(prev["title"])} ({prev["year"]}). '
-                     f'Sequels typically earn about 0.86× their predecessor, and the forecast leans '
-                     f'towards that.</div>')
+                     f'The forecast takes the series\u2019 track record into account.</div>')
+    prev_note = ""
+    if prev and not prev_line:
+        prev_note = (f'<div class="bc-sub" style="margin:.6rem 0 0">Previous film in the series: '
+                     f'{esc(prev["title"])} ({prev["year"]}), {money(prev["revenue"])} worldwide.</div>')
     heading = "Why this number" if mode == "forecast" else "What the pre-release model saw"
     st.html(f'<div class="bc-section">{heading}</div>'
             f'<div class="bc-sub">A typical film in our data earns {money(base)} worldwide. '
-            f'Here\u2019s what moves this one up or down from there.</div>{drivers_html(drivers)}{prev_line}')
+            f'Here\u2019s what moves this one up or down from there.</div>{drivers_html(drivers)}{prev_line}{prev_note}')
 
     # ---- comparables
     st.html('<div class="bc-section">Films like this</div>'

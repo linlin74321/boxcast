@@ -51,6 +51,8 @@ def prior_power(df, person_col):
 
 
 def build_pre_release(movies):
+    """IMDb films 1990-2019, plus (when the Retrain workflow has fetched them)
+    TMDB franchise history and 2020+ releases."""
     m = movies.copy()
     m["country_released"] = m["released"].str.extract(r"\((.*)\)")[0]
     m["release_date"] = pd.to_datetime(
@@ -59,34 +61,54 @@ def build_pre_release(movies):
     m = m[(m["country_released"] == "United States")
           & m["release_date"].notna() & m["gross"].notna()
           & (m["gross"] >= 100_000) & m["runtime"].notna()].copy()
-
-    m["log_gross"] = np.log(m["gross"])
-    m["log_budget"] = np.log(m["budget"])          # NaN when unknown - fine
-    m["month"] = m["release_date"].dt.month
     m["year"] = m["release_date"].dt.year
+    m = m[m["year"] <= 2019]          # 1980s kept only to build track records
     m["genre"] = m["genre"].map(clean_genre)
     m["rating"] = m["rating"].map(clean_rating)
     m["studio"] = m["company"].map(studio_group)
     m["is_sequel"] = m["name"].map(is_sequel)
+    m["source"] = "imdb"
+    base = m[["name", "release_date", "year", "genre", "rating", "studio", "star",
+              "director", "budget", "gross", "runtime", "is_sequel", "source"]]
+    base.to_csv(OUT / "pre_release_imdb.csv", index=False)
 
-    m["star_power"], m["star_films"] = prior_power(m, "star")
-    m["director_power"], m["director_films"] = prior_power(m, "director")
+    df = base.copy()
+    df["prev_gross"], df["franchise_n"] = np.nan, 0
+    hist_path, recent_path = OUT / "tmdb_history.csv", OUT / "tmdb_recent.csv"
+    if hist_path.exists():
+        h = pd.read_csv(hist_path).drop_duplicates("key", keep="last").set_index("key")
+        keys = df["name"] + "|" + df["year"].astype(str)
+        df["prev_gross"] = keys.map(h["prev_gross"]).values
+        df["franchise_n"] = keys.map(h["franchise_n"]).fillna(0).values
+    if recent_path.exists():
+        r = pd.read_csv(recent_path, parse_dates=["release_date"]).drop_duplicates("tmdb_id")
+        r = r.rename(columns={"title": "name"})
+        r["year"] = r["release_date"].dt.year
+        r["is_sequel"] = [is_sequel(t, c) for t, c in zip(r["name"], r["in_collection"])]
+        r["source"] = "tmdb"
+        covid = (r["release_date"] >= "2020-01-15") & (r["release_date"] <= "2021-06-30")
+        r = r[~covid & r["release_date"].notna()]
+        df = pd.concat([df, r[df.columns.intersection(r.columns)]], ignore_index=True)
+    df["franchise_n"] = df["franchise_n"].fillna(0)
+    df["is_sequel"] = ((df["is_sequel"] == 1) | (df["franchise_n"] > 0)).astype(int)
 
-    # A lookup of each person's full track record, used for NEW films.
+    df["log_gross"] = np.log(df["gross"])
+    df["log_budget"] = np.log(df["budget"].where(df["budget"] > 0))   # NaN when unknown
+    df["log_prev_gross"] = np.log(df["prev_gross"].where(df["prev_gross"] > 0))
+    df["month"] = df["release_date"].dt.month
+    df["star_power"], df["star_films"] = prior_power(df, "star")
+    df["director_power"], df["director_films"] = prior_power(df, "director")
+
+    # Each person's full track record, used for NEW films
     people = []
     for role in ("star", "director"):
-        p = (m.groupby(role)["log_gross"].agg(["mean", "count"])
-              .reset_index().rename(columns={role: "name"}))
+        p = (df.groupby(role)["log_gross"].agg(["mean", "count"])
+               .reset_index().rename(columns={role: "name"}))
         p["role"] = role
         people.append(p)
     people = pd.concat(people, ignore_index=True)
-
-    keep = ["name", "release_date", "year", "month", "genre", "rating", "studio",
-            "star", "director", "budget", "gross", "log_budget", "log_gross",
-            "runtime", "is_sequel", "star_power", "star_films",
-            "director_power", "director_films", "score"]
-    m = m[(m["year"] >= 1990) & (m["year"] <= 2019)][keep]
-    return m.sort_values("release_date"), people
+    df = df[df["year"] >= 1990]
+    return df.sort_values("release_date"), people
 
 
 # ---------------------------------------------------------------------------

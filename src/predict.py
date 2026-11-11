@@ -11,7 +11,7 @@ import lightgbm as lgb
 import numpy as np
 import pandas as pd
 
-from features import POST_FEATURES, PRE_FEATURES, post_feature_row, pre_model_frame
+from features import POST_FEATURES, post_feature_row, pre_model_frame
 
 ROOT = Path(__file__).resolve().parents[1]
 MODELS, DATA = ROOT / "models", ROOT / "data"
@@ -39,7 +39,18 @@ def person_power(name, role):
     return people_power().get((role, name), (np.nan, 0))
 
 
+def model_features(prefix):
+    """The input columns a saved model was trained with."""
+    return _booster(f"{prefix}_mid").feature_name()
+
+
+def uses_franchise_feature():
+    return "log_prev_gross" in model_features("pre")
+
+
 def _quantiles(prefix, X, widen):
+    if not isinstance(X, pd.DataFrame) or prefix.startswith("pre"):
+        X = pre_model_frame(X, model_features(prefix))
     q = np.column_stack([_booster(f"{prefix}_{n}").predict(X)
                          for n in ("low", "mid", "high")])
     q = np.sort(q, axis=1)
@@ -51,7 +62,7 @@ def _quantiles(prefix, X, widen):
 def predict_pre(df):
     """Worldwide lifetime gross (USD) for each row of PRE_FEATURES."""
     widen = metrics()["pre_release"]["range_widen_log"]
-    q = np.exp(_quantiles("pre", pre_model_frame(df), widen))
+    q = np.exp(_quantiles("pre", df, widen))
     return pd.DataFrame(q, columns=["pred_low", "pred_mid", "pred_high"], index=df.index)
 
 
@@ -59,9 +70,8 @@ def predict_pre_all(df):
     """Worldwide total, US opening weekend and US total for each row."""
     out = predict_pre(df)
     us = metrics()["pre_release_us"]
-    X = pre_model_frame(df)
     for tag, key in (("open", "opening_weekend"), ("dom", "domestic_total")):
-        q = np.exp(_quantiles(f"pre_{tag}", X, us[key]["range_widen_log"]))
+        q = np.exp(_quantiles(f"pre_{tag}", df, us[key]["range_widen_log"]))
         for i, n in enumerate(("low", "mid", "high")):
             out[f"{tag}_{n}"] = q[:, i]
     # US numbers can't logically exceed worldwide, nor opening exceed US total
@@ -91,8 +101,11 @@ SEQUEL_WEIGHT = 0.35
 
 def apply_sequel_anchor(p, prev_revenue):
     """Shift every forecast (worldwide, US opening, US total) towards what the
-    previous film in the series earned."""
+    previous film in the series earned. Once the model has been retrained with
+    franchise history it learns this itself, so the fixed rule switches off."""
     p = p.copy()
+    if uses_franchise_feature():
+        return p
     anchor = math.log(prev_revenue) + SEQUEL_MEDIAN_LOG_RATIO
     shift = math.exp(SEQUEL_WEIGHT * (anchor - math.log(p["pred_mid"])))
     for col in [c for c in p.index if c.startswith(("pred_", "open_", "dom_"))]:
@@ -134,16 +147,18 @@ DRIVER_GROUPS = {
     "Runtime": ["runtime"],
     "Age rating": ["rating"],
     "Studio": ["studio"],
+    "Previous film in the series": ["log_prev_gross", "franchise_n"],
 }
 
 
 def explain(df_row):
     """Why the worldwide forecast is what it is. Returns the typical film's gross
     and a list of (driver, % effect) sorted by size of effect."""
-    contrib = _booster("pre_mid").predict(pre_model_frame(df_row), pred_contrib=True)[0]
-    by_feature = dict(zip(PRE_FEATURES, contrib[:-1]))
+    feats_used = model_features("pre")
+    contrib = _booster("pre_mid").predict(pre_model_frame(df_row, feats_used), pred_contrib=True)[0]
+    by_feature = dict(zip(feats_used, contrib[:-1]))
     baseline = math.exp(contrib[-1])
-    drivers = [(name, sum(by_feature[f] for f in feats))
+    drivers = [(name, sum(by_feature.get(f, 0.0) for f in feats))
                for name, feats in DRIVER_GROUPS.items()]
     drivers = [(n, math.exp(v) - 1, v) for n, v in drivers if abs(v) > 0.03]
     drivers.sort(key=lambda d: abs(d[2]), reverse=True)

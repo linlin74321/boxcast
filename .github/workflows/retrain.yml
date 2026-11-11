@@ -1,0 +1,51 @@
+# "Retrain models" - run it from the Actions tab whenever you like (no schedule).
+# It fetches franchise history and 2020+ films from TMDB, rebuilds the training
+# data, retrains every model and saves them back to this repository.
+# New pre-release models are only kept if they beat the current ones.
+# First run takes roughly 30-60 minutes; later runs reuse saved data and are faster.
+name: Retrain models
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  retrain:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install libraries
+        run: pip install -r requirements.txt
+
+      - name: Build the base historical data
+        run: python src/build_datasets.py
+
+      - name: Fetch franchise history and recent films from TMDB
+        env:
+          TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
+        run: python src/enrich_tmdb.py
+
+      - name: Rebuild training data with TMDB additions
+        run: python src/build_datasets.py
+
+      - name: Retrain models (with safety check)
+        run: python src/train_models.py
+
+      - name: Save new data and models
+        if: always()
+        run: |
+          git config user.name "boxcast-bot"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data models
+          git diff --staged --quiet || git commit -m "Retrain models with TMDB data"
+          git pull --rebase --autostash
+          git push

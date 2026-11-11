@@ -36,4 +36,5 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add data/live_forecasts.csv data/forecast_history.csv
           git diff --staged --quiet || git commit -m "Daily forecast update"
+          git pull --rebase --autostash
           git push

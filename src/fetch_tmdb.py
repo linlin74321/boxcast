@@ -6,6 +6,7 @@ fetch_tmdb.py - the DAILY AUTOMATIC UPDATE (run by GitHub Actions).
   3. saves data/live_forecasts.csv (the "In cinemas & coming soon" strip in the
      app) and appends to data/forecast_history.csv (your track record).
 """
+import math
 import os
 import sys
 import time
@@ -41,6 +42,8 @@ def run(key):
             prev = api.previous_installment(d)
             if prev:
                 prevs[tmdb_id] = prev["revenue"]
+                rows[-1].update(log_prev_gross=math.log(prev["revenue"]),
+                                franchise_n=prev.get("count", 1), is_sequel=1)
         except Exception as e:
             print(f"no franchise info for {tmdb_id}: {e}")
         time.sleep(0.05)

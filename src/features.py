@@ -52,6 +52,8 @@ SEQUEL_RE = re.compile(r"(\b(2|3|4|5|6|7|8|9|II|III|IV|V|VI|Part)\b)|:")
 PRE_FEATURES = ["log_budget", "runtime", "month", "year", "is_sequel",
                 "star_power", "star_films", "director_power", "director_films",
                 "genre", "rating", "studio"]
+# Added once the Retrain workflow has fetched franchise history from TMDB
+PRE_FEATURES_FRANCHISE = PRE_FEATURES + ["log_prev_gross", "franchise_n"]
 PRE_CATEGORIES = {"genre": GENRES, "rating": RATINGS, "studio": STUDIOS}
 
 
@@ -84,15 +86,20 @@ def imdb_primary_genre(tmdb_genre_names):
     return clean_genre(names[0]) if names else "Other"
 
 
-def pre_model_frame(df):
-    """Return only the model columns, with categories fixed in a set order."""
+def pre_model_frame(df, features=None):
+    """Return only the model columns (in the model's order), with categories
+    fixed in a set order. Missing columns are filled as unknown."""
+    features = list(features or PRE_FEATURES)
     out = df.copy()
+    for col in features:
+        if col not in out.columns:
+            out[col] = np.nan
     for col, cats in PRE_CATEGORIES.items():
         out[col] = pd.Categorical(out[col], categories=cats)
-    for col in PRE_FEATURES:
+    for col in features:
         if col not in PRE_CATEGORIES:
             out[col] = pd.to_numeric(out[col], errors="coerce")
-    return out[PRE_FEATURES]
+    return out[features]
 
 
 # ---------------------------------------------------------------------------

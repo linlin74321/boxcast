@@ -77,6 +77,19 @@ to break even (cinemas keep roughly half the ticket money, plus marketing costs)
 the calibrated forecast range as a log-normal distribution gives the probability of
 clearing that bar.
 
+**Franchise history and recent films (after the Retrain workflow).** The retrain looks up
+every film on TMDB, finds the previous film in its series and records what it earned. That
+becomes a model input ("Previous film in the series"), and it also adds 2020–2025
+releases so the model learns today's post-COVID market and current stars. Testing then
+switches to films released from 2022 onwards. A safety check only replaces the existing
+model if the new one is more accurate on those unseen films. (Before retraining, the app
+applies a simple fixed rule instead: sequels typically earn ~0.86× their predecessor.)
+
+**Why not trailer views?** Today's view count for an old trailer mostly reflects whether the
+film became a hit, which happened *after* release. Training on it would leak the answer:
+great test scores, useless real forecasts. A clean buzz signal needs views recorded before
+release, which the app's daily history file will collect over time.
+
 ## 5. How we tested it (very important in a viva)
 **Time-based split:** train on older films, test on newer films the model has never seen,
 exactly like forecasting a real future release. Random splits would be cheating, because the

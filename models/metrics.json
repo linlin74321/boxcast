@@ -1,18 +1,18 @@
 {
+  "trained_through_year": 2019,
   "pre_release": {
-    "test_period": "films released 2016-2019 (trained on 1990-2015)",
     "target": "worldwide lifetime gross",
     "films_tested": 701,
     "median_abs_pct_error": 60.5,
     "within_25pct": 21.8,
     "within_50pct": 40.8,
     "range_coverage": 79.7,
-    "baseline_budget_only_median_abs_pct_error": 64.4,
-    "ours_same_films_median_abs_pct_error": 55.6,
-    "range_widen_log": 0.2895
+    "test_period": "films released 2016-2019 (trained on 1990-2015)",
+    "range_widen_log": 0.2895,
+    "baseline_budget_only_median_abs_pct_error": 64.4
   },
   "pre_release_us": {
-    "test_period": "films released 2016-2019 (trained on 2000-2015)",
+    "test_period": "films released 2016-2019 (trained on 1990-2015)",
     "opening_weekend": {
       "films_tested": 431,
       "median_abs_pct_error": 45.4,
@@ -28,47 +28,6 @@
       "within_50pct": 47.3,
       "range_coverage": 81.4,
       "range_widen_log": 0.3277
-    }
-  },
-  "post_release": {
-    "test_period": "films released Jul 2022 - Aug 2024 (trained on 2000-Jun 2022)",
-    "target": "domestic (US+Canada) lifetime gross",
-    "after_weekend_1": {
-      "films_tested": 249,
-      "median_abs_pct_error": 16.3,
-      "within_25pct": 67.1,
-      "within_50pct": 88.8,
-      "range_coverage": 73.1,
-      "range_widen_log": 0.0709,
-      "baseline_typical_multiplier_median_abs_pct_error": 20.4
-    },
-    "after_weekend_2": {
-      "films_tested": 240,
-      "median_abs_pct_error": 8.5,
-      "within_25pct": 92.9,
-      "within_50pct": 98.3,
-      "range_coverage": 84.6,
-      "range_widen_log": 0.0566,
-      "baseline_typical_multiplier_median_abs_pct_error": 19.5
-    },
-    "after_weekend_3": {
-      "films_tested": 222,
-      "median_abs_pct_error": 5.7,
-      "within_25pct": 97.3,
-      "within_50pct": 100.0,
-      "range_coverage": 84.7,
-      "range_widen_log": 0.0472,
-      "baseline_typical_multiplier_median_abs_pct_error": 18.0
-    }
-  },
-  "in_release_projection": {
-    "test_period": "Jul 2022 - Aug 2024",
-    "films_tested": 249,
-    "median_abs_pct_error": {
-      "after_opening_weekend": 20.4,
-      "after_week_1": 17.8,
-      "after_week_2": 14.2,
-      "after_week_3": 10.1
     }
   },
   "importance": {
@@ -120,6 +79,47 @@
         "major": 0.0053,
         "holiday": 0.0016
       }
+    }
+  },
+  "post_release": {
+    "test_period": "films released Jul 2022 - Aug 2024 (trained on 2000-Jun 2022)",
+    "target": "domestic (US+Canada) lifetime gross",
+    "after_weekend_1": {
+      "films_tested": 249,
+      "median_abs_pct_error": 16.3,
+      "within_25pct": 67.1,
+      "within_50pct": 88.8,
+      "range_coverage": 73.1,
+      "range_widen_log": 0.0709,
+      "baseline_typical_multiplier_median_abs_pct_error": 20.4
+    },
+    "after_weekend_2": {
+      "films_tested": 240,
+      "median_abs_pct_error": 8.5,
+      "within_25pct": 92.9,
+      "within_50pct": 98.3,
+      "range_coverage": 84.6,
+      "range_widen_log": 0.0566,
+      "baseline_typical_multiplier_median_abs_pct_error": 19.5
+    },
+    "after_weekend_3": {
+      "films_tested": 222,
+      "median_abs_pct_error": 5.7,
+      "within_25pct": 97.3,
+      "within_50pct": 100.0,
+      "range_coverage": 84.7,
+      "range_widen_log": 0.0472,
+      "baseline_typical_multiplier_median_abs_pct_error": 18.0
+    }
+  },
+  "in_release_projection": {
+    "test_period": "Jul 2022 - Aug 2024",
+    "films_tested": 249,
+    "median_abs_pct_error": {
+      "after_opening_weekend": 20.4,
+      "after_week_1": 17.8,
+      "after_week_2": 14.2,
+      "after_week_3": 10.1
     }
   }
 }

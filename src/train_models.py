@@ -5,11 +5,16 @@ train_models.py - trains the forecasting models and measures their accuracy.
 
 Method in one line: gradient-boosted decision trees (LightGBM, a close cousin
 of XGBoost) trained with QUANTILE loss, so each model gives a low (10th
-percentile), likely (median) and high (90th percentile) estimate.
+percentile), likely (median) and high (90th percentile) estimate. Ranges are
+then conformally calibrated so they contain the real result ~80% of the time.
 
 Honest testing: we train on older films and test on newer ones the model has
-never seen (a "time-based split"), exactly like forecasting real releases.
-Final models are then retrained on all the data.
+never seen (a "time-based split"). When recent films are available (after the
+Retrain workflow has fetched them from TMDB) the test is on 2022+ releases -
+today's post-COVID market. Final models are then retrained on all the data.
+
+Safety check: new pre-release models only replace the current ones if they
+are at least as accurate on the same unseen films.
 """
 import json
 from pathlib import Path
@@ -19,7 +24,7 @@ import numpy as np
 import pandas as pd
 from sklearn.linear_model import LinearRegression
 
-from features import POST_FEATURES, PRE_FEATURES, pre_model_frame
+from features import POST_FEATURES, PRE_FEATURES, PRE_FEATURES_FRANCHISE, pre_model_frame
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA, MODELS = ROOT / "data", ROOT / "models"
@@ -68,59 +73,86 @@ def score(actual, low, mid, high):
     }
 
 
-def train_pre():
-    df = pd.read_csv(DATA / "pre_release.csv", parse_dates=["release_date"])
-    train, test = df[df["year"] <= 2015], df[df["year"] >= 2016]
-    fit_, cal_ = train[train["year"] <= 2011], train[train["year"] >= 2012]
-    widen = calibration_widen(pre_model_frame(fit_), fit_["log_gross"],
-                              pre_model_frame(cal_), cal_["log_gross"])
+def pre_split(df):
+    """Train / calibration / test split for the pre-release models."""
+    if (df["year"] >= 2022).sum() >= 100:
+        test = df[df["year"] >= 2022]
+        train = df[df["year"] <= 2021]
+        period = "films released 2022 onwards (trained on 1990-2021)"
+    else:
+        test = df[df["year"] >= 2016]
+        train = df[df["year"] <= 2015]
+        period = "films released 2016-2019 (trained on 1990-2015)"
+    cal_start = int(train["year"].max()) - 3 if train["year"].max() < 2020 else 2016
+    fit_, cal_ = train[train["year"] < cal_start], train[train["year"] >= cal_start]
+    return train, test, fit_, cal_, period
 
-    models = fit_quantiles(pre_model_frame(train), train["log_gross"])
-    q = np.exp(predict_quantiles(models, pre_model_frame(test), widen))
+
+def old_model_error(prefix, test, target_money):
+    """How the CURRENTLY saved model does on the same unseen films (for the
+    safety check). None if it can't be compared fairly."""
+    try:
+        old = json.loads((MODELS / "metrics.json").read_text())
+        trained_through = old.get("trained_through_year", 2019)
+        if trained_through >= test["year"].min():
+            return None                         # it has already seen these films
+        b = lgb.Booster(model_file=str(MODELS / f"{prefix}_mid.txt"))
+        pred = np.exp(b.predict(pre_model_frame(test, b.feature_name())))
+        return float(np.median(np.abs(pred - test[target_money]) / test[target_money]) * 100)
+    except Exception:
+        return None
+
+
+def train_pre(features):
+    df = pd.read_csv(DATA / "pre_release.csv", parse_dates=["release_date"])
+    train, test, fit_, cal_, period = pre_split(df)
+    widen = calibration_widen(pre_model_frame(fit_, features), fit_["log_gross"],
+                              pre_model_frame(cal_, features), cal_["log_gross"])
+    models = fit_quantiles(pre_model_frame(train, features), train["log_gross"])
+    q = np.exp(predict_quantiles(models, pre_model_frame(test, features), widen))
     metrics = score(test["gross"].values, *q.T)
+    metrics["test_period"] = period
+    metrics["range_widen_log"] = round(widen, 4)
 
     # Baseline to beat: a straight line on budget alone
     tb, sb = train.dropna(subset=["log_budget"]), test.dropna(subset=["log_budget"])
     lr = LinearRegression().fit(tb[["log_budget"]], tb["log_gross"])
     base = np.exp(lr.predict(sb[["log_budget"]]))
-    ours = q[test["log_budget"].notna().values, 1]
     metrics["baseline_budget_only_median_abs_pct_error"] = round(
         float(np.median(np.abs(base - sb["gross"]) / sb["gross"])) * 100, 1)
-    metrics["ours_same_films_median_abs_pct_error"] = round(
-        float(np.median(np.abs(ours - sb["gross"]) / sb["gross"])) * 100, 1)
+    if "prev_gross" in test:
+        seq = test["log_prev_gross"].notna().values
+        if seq.sum() >= 10:
+            metrics["sequels_median_abs_pct_error"] = round(float(np.median(
+                np.abs(q[seq, 1] - test["gross"].values[seq]) / test["gross"].values[seq])) * 100, 1)
 
     out = test[["name", "year", "genre", "budget", "gross"]].copy()
     out["pred_low"], out["pred_mid"], out["pred_high"] = q.T
-    out.to_csv(DATA / "test_predictions_pre.csv", index=False)
+    importance = pd.Series(models["mid"].booster_.feature_importance("gain"), index=features)
+    importance = (importance / importance.sum()).round(4).sort_values(ascending=False).to_dict()
 
-    importance = pd.Series(models["mid"].booster_.feature_importance("gain"),
-                           index=PRE_FEATURES).sort_values(ascending=False)
-
-    final = fit_quantiles(pre_model_frame(df), df["log_gross"])
-    for name, m in final.items():
-        m.booster_.save_model(str(MODELS / f"pre_{name}.txt"))
-    metrics["range_widen_log"] = round(widen, 4)
-    return metrics, (importance / importance.sum()).round(4).to_dict()
+    old_err = old_model_error("pre", test, "gross")
+    final = fit_quantiles(pre_model_frame(df, features), df["log_gross"])
+    return {"metrics": metrics, "importance": importance, "test_predictions": out,
+            "final": final, "old_error": old_err, "trained_through": int(df["year"].max())}
 
 
-def train_pre_us():
+def train_pre_us(features):
     """Pre-release forecasts of US opening weekend and US (domestic) total."""
     df = pd.read_csv(DATA / "pre_us.csv", parse_dates=["release_date"])
-    out = {}
+    out, finals = {}, {}
+    train, test, fit_, cal_, period = pre_split(df)
     for tag, target, money in (("open", "log_w1", "w1"), ("dom", "log_dom", "lifetime")):
-        train, test = df[df["year"] <= 2015], df[df["year"] >= 2016]
-        fit_, cal_ = train[train["year"] <= 2011], train[train["year"] >= 2012]
-        widen = calibration_widen(pre_model_frame(fit_), fit_[target],
-                                  pre_model_frame(cal_), cal_[target])
-        models = fit_quantiles(pre_model_frame(train), train[target])
-        q = np.exp(predict_quantiles(models, pre_model_frame(test), widen))
+        widen = calibration_widen(pre_model_frame(fit_, features), fit_[target],
+                                  pre_model_frame(cal_, features), cal_[target])
+        models = fit_quantiles(pre_model_frame(train, features), train[target])
+        q = np.exp(predict_quantiles(models, pre_model_frame(test, features), widen))
         m = score(test[money].values, *q.T)
         m["range_widen_log"] = round(widen, 4)
         out[tag] = m
-        final = fit_quantiles(pre_model_frame(df), df[target])
-        for name, mdl in final.items():
-            mdl.booster_.save_model(str(MODELS / f"pre_{tag}_{name}.txt"))
-    return out
+        finals[tag] = fit_quantiles(pre_model_frame(df, features), df[target])
+    out["test_period"] = period
+    return out, finals
 
 
 def train_post():
@@ -184,18 +216,44 @@ def eval_in_release():
 
 
 if __name__ == "__main__":
-    pre_metrics, pre_imp = train_pre()
+    pre_df = pd.read_csv(DATA / "pre_release.csv")
+    has_franchise = pre_df.get("log_prev_gross", pd.Series(dtype=float)).notna().sum() >= 100
+    features = PRE_FEATURES_FRANCHISE if has_franchise else PRE_FEATURES
+    print(f"Pre-release features: {'with' if has_franchise else 'without'} franchise history; "
+          f"{len(pre_df):,} films up to {pre_df['year'].max()}")
+
+    pre = train_pre(features)
+    us_metrics, us_finals = train_pre_us(features)
     post_metrics, post_imp = train_post()
-    us_metrics = train_pre_us()
-    report = {
-        "pre_release": {"test_period": "films released 2016-2019 (trained on 1990-2015)",
-                        "target": "worldwide lifetime gross", **pre_metrics},
-        "pre_release_us": {"test_period": "films released 2016-2019 (trained on 2000-2015)",
-                           "opening_weekend": us_metrics["open"], "domestic_total": us_metrics["dom"]},
-        "post_release": {"test_period": "films released Jul 2022 - Aug 2024 (trained on 2000-Jun 2022)",
-                         "target": "domestic (US+Canada) lifetime gross", **post_metrics},
-        "in_release_projection": eval_in_release(),
-        "importance": {"pre_release": pre_imp, "post_release": post_imp},
-    }
+
+    new_err, old_err = pre["metrics"]["median_abs_pct_error"], pre["old_error"]
+    keep_old = old_err is not None and new_err > old_err + 0.5
+    previous = json.loads((MODELS / "metrics.json").read_text()) if (MODELS / "metrics.json").exists() else {}
+
+    if keep_old:
+        print(f"SAFETY CHECK: new pre-release model error {new_err}% is worse than the current "
+              f"model's {old_err:.1f}% on the same films. Keeping the current pre-release models.")
+        report = previous
+    else:
+        if old_err is not None:
+            print(f"Safety check passed: new {new_err}% vs current {old_err:.1f}% on the same films.")
+        for name, m in pre["final"].items():
+            m.booster_.save_model(str(MODELS / f"pre_{name}.txt"))
+        for tag, models in us_finals.items():
+            for name, m in models.items():
+                m.booster_.save_model(str(MODELS / f"pre_{tag}_{name}.txt"))
+        pre["test_predictions"].to_csv(DATA / "test_predictions_pre.csv", index=False)
+        report = {
+            "trained_through_year": pre["trained_through"],
+            "pre_release": {"target": "worldwide lifetime gross", **pre["metrics"]},
+            "pre_release_us": {"test_period": us_metrics["test_period"],
+                               "opening_weekend": us_metrics["open"],
+                               "domestic_total": us_metrics["dom"]},
+            "importance": {"pre_release": pre["importance"]},
+        }
+    report["post_release"] = {"test_period": "films released Jul 2022 - Aug 2024 (trained on 2000-Jun 2022)",
+                              "target": "domestic (US+Canada) lifetime gross", **post_metrics}
+    report["in_release_projection"] = eval_in_release()
+    report.setdefault("importance", {})["post_release"] = post_imp
     (MODELS / "metrics.json").write_text(json.dumps(report, indent=2))
-    print(json.dumps({k: v for k, v in report.items() if k != "importance"}, indent=2))
+    print(json.dumps({k: v for k, v in report.items() if k not in ("importance",)}, indent=2))
