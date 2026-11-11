@@ -29,23 +29,61 @@ PAGEVIEWS = ("https://wikimedia.org/api/rest_v1/metrics/pageviews/per-article/"
 
 _session = requests.Session()
 _session.headers.update(HEADERS)
+
+
+class WikiUnavailable(Exception):
+    """Wikipedia/Wikidata refused or failed - try again later (never cache this)."""
+
+
+def _get(url, params=None, tries=5):
+    """GET with polite retries: waits and retries when asked to slow down."""
+    import time
+    for attempt in range(tries):
+        try:
+            r = _session.get(url, params=params, timeout=30)
+        except requests.RequestException:
+            time.sleep(2 * (attempt + 1))
+            continue
+        if r.status_code in (429, 500, 502, 503, 504):
+            wait = r.headers.get("Retry-After")
+            time.sleep(float(wait) if wait and wait.isdigit() else 3 * (attempt + 1))
+            continue
+        return r
+    raise WikiUnavailable(url)
 _FAKE = None
 if os.environ.get("BOXCAST_FAKE_WIKI"):           # test mode: answers from a local file
     with open(os.environ["BOXCAST_FAKE_WIKI"]) as fh:
         _FAKE = json.load(fh)
 
 
+def wiki_titles(wikidata_ids):
+    """English Wikipedia titles for many Wikidata ids at once (50 per request).
+    Returns {id: title or None}; None means the film has no English article.
+    Raises WikiUnavailable if Wikidata can't be reached right now."""
+    ids = [i for i in dict.fromkeys(wikidata_ids) if isinstance(i, str) and i.startswith("Q")]
+    out = {}
+    if _FAKE is not None:
+        if _FAKE.get("fail_titles"):
+            raise WikiUnavailable("test")
+        return {i: _FAKE["titles"].get(i) for i in ids}
+    for start in range(0, len(ids), 50):
+        batch = ids[start:start + 50]
+        r = _get("https://www.wikidata.org/w/api.php",
+                 {"action": "wbgetentities", "ids": "|".join(batch), "props": "sitelinks",
+                  "sitefilter": "enwiki", "format": "json"})
+        if r.status_code != 200:
+            raise WikiUnavailable(f"Wikidata returned {r.status_code}")
+        ents = r.json().get("entities", {})
+        for i in batch:
+            out[i] = ents.get(i, {}).get("sitelinks", {}).get("enwiki", {}).get("title")
+    return out
+
+
 def wiki_title(wikidata_id):
-    """English Wikipedia article title for a Wikidata id (e.g. Q12345)."""
+    """English Wikipedia article title for one Wikidata id (e.g. Q12345)."""
     if not wikidata_id:
         return None
-    if _FAKE is not None:
-        return _FAKE["titles"].get(wikidata_id)
-    r = _session.get(f"https://www.wikidata.org/wiki/Special:EntityData/{wikidata_id}.json", timeout=20)
-    if r.status_code != 200:
-        return None
-    ent = r.json().get("entities", {}).get(wikidata_id, {})
-    return ent.get("sitelinks", {}).get("enwiki", {}).get("title")
+    return wiki_titles([wikidata_id]).get(wikidata_id)
 
 
 def daily_views(title, start, end):
@@ -63,10 +101,11 @@ def daily_views(title, start, end):
         return pd.Series(level * ramp, index=days)
     url = PAGEVIEWS.format(title=quote(title.replace(" ", "_"), safe=""),
                            start=start.strftime("%Y%m%d"), end=end.strftime("%Y%m%d"))
-    r = _session.get(url, timeout=20)
-    if r.status_code == 404:
+    r = _get(url)
+    if r.status_code == 404:                     # no views recorded for that period
         return pd.Series(dtype=float)
-    r.raise_for_status()
+    if r.status_code != 200:
+        raise WikiUnavailable(f"pageviews returned {r.status_code}")
     items = r.json().get("items", [])
     return pd.Series({pd.Timestamp(i["timestamp"][:8]): i["views"] for i in items}, dtype=float)
 

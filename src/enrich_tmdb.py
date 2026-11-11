@@ -24,7 +24,7 @@ import numpy as np
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from buzz import FIRST_DAY, horizon_views, wiki_title  # noqa: E402
+from buzz import FIRST_DAY, WikiUnavailable, horizon_views, wiki_titles  # noqa: E402
 from tmdb import TMDB, film_features  # noqa: E402
 
 DATA = Path(__file__).resolve().parents[1] / "data"
@@ -198,26 +198,40 @@ def enrich_wiki(pre):
                   & (films["release_date"] >= FIRST_DAY + pd.Timedelta(days=35))]
 
     done = pd.read_csv(WIKI) if WIKI.exists() else pd.DataFrame(columns=["key"])
-    have = set(done["key"])
-    todo = films[~films["key"].isin(have)]
-    print(f"Wikipedia buzz: {len(have)} cached, {len(todo)} to fetch")
-    rows = []
+    # Keep only finished lookups: an article found, or confirmed to have none.
+    # (Earlier versions saved failed lookups as "no article"; those get retried.)
+    if "wiki_status" not in done:
+        done["wiki_status"] = np.where(done.get("wiki_title", pd.Series(dtype=object)).notna(), "ok", None)
+    done = done[done["wiki_status"].isin(["ok", "no_article"])]
+    todo = films[~films["key"].isin(set(done["key"]))]
+    print(f"Wikipedia buzz: {len(done)} done, {len(todo)} to fetch")
+
+    try:
+        titles = wiki_titles(todo["wikidata_id"].tolist())
+    except WikiUnavailable as err:
+        print(f"  Wikidata unavailable right now ({err}); buzz will be fetched next run")
+        done.to_csv(WIKI, index=False)
+        return
+    rows, failures = [], 0
     for n, r in enumerate(todo.itertuples(), 1):
+        title = titles.get(r.wikidata_id)
+        if not title:
+            rows.append({"key": r.key, "wiki_title": None, "wiki_status": "no_article"})
+            continue
         try:
-            title = wiki_title(r.wikidata_id)
-            views = horizon_views(title, r.release_date) if title else {}
-            rows.append({"key": r.key, "wiki_title": title,
+            views = horizon_views(title, r.release_date)
+            rows.append({"key": r.key, "wiki_title": title, "wiki_status": "ok",
                          **{f"wiki_{h}": v for h, v in views.items()}})
-        except Exception as err:
-            print(f"  skipped {r.key}: {err}")
-        time.sleep(0.02)
+        except WikiUnavailable:
+            failures += 1                        # not saved, so it's retried next run
+        time.sleep(0.03)
         if n % 250 == 0:
             print(f"  {n}/{len(todo)}")
             pd.concat([done, pd.DataFrame(rows)]).to_csv(WIKI, index=False)
     out = pd.concat([done, pd.DataFrame(rows)], ignore_index=True)
     out.to_csv(WIKI, index=False)
     n_buzz = out["wiki_30"].notna().sum() if "wiki_30" in out else 0
-    print(f"  saved {len(out)} films, {n_buzz} with buzz data")
+    print(f"  {len(out)} films done, {n_buzz} with buzz data, {failures} to retry next run")
 
 
 if __name__ == "__main__":
