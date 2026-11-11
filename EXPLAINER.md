@@ -112,27 +112,45 @@ model would learn from films released after the ones it is "predicting".
 - Post-release: trained on 2000–Jun 2022, tested on **~250 films from Jul 2022–Aug 2024**
 
 ## 6. Results (median error on unseen films)
-| Stage | BoxCast | Simple rule of thumb | Range contained the actual |
-|---|---|---|---|
-| Before release (worldwide) | **60.5%** | 64.4% (budget-only line) | 79.7% |
-| After weekend 1 (domestic) | **16.3%** | 20.4% (typical multiplier) | 73.1% |
-| After weekend 2 | **8.5%** | 19.5% | 84.6% |
-| After weekend 3 | **5.7%** | 18.0% | 84.7% |
+All numbers below are from films released **2022 onwards** that the model never saw
+(trained on 1990–2021). This is the honest test for forecasting films today.
 
-After weekend 1, **67% of forecasts were within ±25%** of the final number. After weekend 2, **93%** were.
+**Before release: what each improvement added**
+| Version | Typical error (worldwide) | Within ±50% |
+|---|---|---|
+| Budget-only rule of thumb | 66.7% | |
+| Core model + franchise history + 2020–25 films | 61.7% | |
+| **+ market signals (Wikipedia buzz, China release, competition)** | **55.9%** | **43.7%** |
 
-**How to talk about the 60% pre-release error:** it's honest, not a failure. Before release
-the model can't see the most important factor, which is whether audiences will like the film.
-That's exactly why the product (a) always shows a range and (b) re-forecasts as soon as
-weekend data arrives. The big story is the **"forecast funnel": 60% → 16% → 8.5% → 5.7%.**
+- Sequels: **48.6%** typical error (the franchise history helps most here)
+- US opening weekend: 51.8% · US total: 57.6%
+- The forecast range contained the real result **83%** of the time (designed for 80%)
+- Wikipedia buzz was collected for 1,813 films (released from late 2015)
 
-**What drives the forecasts:**
-- Pre-release: budget (~41%), then director's and star's track record, release year, runtime, studio.
-- Post-release: the 2nd-weekend drop dominates once known (~46%), followed by opening size and theater count.
+**Once a film is in cinemas** (projection from earnings so far, tested on Jul 2022 – Aug 2024 releases)
+| Stage | Typical error |
+|---|---|
+| After opening weekend | 20.4% |
+| After 1 week | 17.8% |
+| After 2 weeks | 14.2% |
+| After 3 weeks | 10.1% |
+
+**How to talk about the ~56% pre-release error:** it's honest, not a failure. Before release
+nobody knows whether audiences will love the film, and even studio tracking misses big films.
+That's why the product always shows a range, switches to a projection from real earnings the
+moment a film opens, and shows actual totals once it's finished. The story is the
+**forecast funnel: 56% before release → about 20% after opening weekend → about 10% after three weeks.**
+
+**The head-to-head test** is the strongest slide: on the same 1,201 unseen films, adding market
+signals cut the typical error from 61.7% to 55.9%. A ~6-point gain from free, public data.
+
+**What drives the forecasts:** budget (~40%), then the previous film in the series, the
+director's and star's track records, release year, studio and runtime. China release and
+Wikipedia buzz add further lift on top.
 
 ## 7. Limitations (say these before they're asked)
 - Money isn't adjusted for inflation. The year feature only partly captures this.
-- The pre-release data ends in 2019, and post-COVID audiences are more front-loaded.
+- Post-COVID audiences are more front-loaded and harder to predict.
 - The sequel flag is a rough title rule (numbers, "Part", a colon).
 - Missing so far: marketing spend, trailer views, social buzz, critic and audience reviews.
 - The historical data is scraped from public sources. A commercial version must license data.
