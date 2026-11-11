@@ -1,0 +1,96 @@
+{
+  "pre_release": {
+    "test_period": "films released 2016-2019 (trained on 1990-2015)",
+    "target": "worldwide lifetime gross",
+    "films_tested": 701,
+    "median_abs_pct_error": 60.5,
+    "within_25pct": 21.8,
+    "within_50pct": 40.8,
+    "range_coverage": 79.7,
+    "baseline_budget_only_median_abs_pct_error": 64.4,
+    "ours_same_films_median_abs_pct_error": 55.6,
+    "range_widen_log": 0.2895
+  },
+  "post_release": {
+    "test_period": "films released Jul 2022 - Aug 2024 (trained on 2000-Jun 2022)",
+    "target": "domestic (US+Canada) lifetime gross",
+    "after_weekend_1": {
+      "films_tested": 249,
+      "median_abs_pct_error": 16.3,
+      "within_25pct": 67.1,
+      "within_50pct": 88.8,
+      "range_coverage": 73.1,
+      "range_widen_log": 0.0709,
+      "baseline_typical_multiplier_median_abs_pct_error": 20.4
+    },
+    "after_weekend_2": {
+      "films_tested": 240,
+      "median_abs_pct_error": 8.5,
+      "within_25pct": 92.9,
+      "within_50pct": 98.3,
+      "range_coverage": 84.6,
+      "range_widen_log": 0.0566,
+      "baseline_typical_multiplier_median_abs_pct_error": 19.5
+    },
+    "after_weekend_3": {
+      "films_tested": 222,
+      "median_abs_pct_error": 5.7,
+      "within_25pct": 97.3,
+      "within_50pct": 100.0,
+      "range_coverage": 84.7,
+      "range_widen_log": 0.0472,
+      "baseline_typical_multiplier_median_abs_pct_error": 18.0
+    }
+  },
+  "importance": {
+    "pre_release": {
+      "log_budget": 0.4142,
+      "director_power": 0.1143,
+      "star_power": 0.0913,
+      "year": 0.0894,
+      "runtime": 0.0661,
+      "studio": 0.0628,
+      "month": 0.0407,
+      "genre": 0.033,
+      "star_films": 0.0312,
+      "director_films": 0.0262,
+      "rating": 0.0169,
+      "is_sequel": 0.0139
+    },
+    "post_release": {
+      "after_weekend_1": {
+        "log_w1": 0.3565,
+        "log_theaters": 0.2667,
+        "month": 0.1404,
+        "year": 0.1237,
+        "preview_days": 0.0793,
+        "major": 0.018,
+        "summer": 0.01,
+        "holiday": 0.0055
+      },
+      "after_weekend_2": {
+        "drop2": 0.4574,
+        "log_w1": 0.1891,
+        "log_theaters": 0.1132,
+        "month": 0.106,
+        "year": 0.0552,
+        "preview_days": 0.0487,
+        "summer": 0.0202,
+        "major": 0.0077,
+        "holiday": 0.0025
+      },
+      "after_weekend_3": {
+        "drop2": 0.3759,
+        "drop3": 0.2207,
+        "month": 0.0975,
+        "log_w1": 0.0952,
+        "log_theaters": 0.0712,
+        "year": 0.0511,
+        "preview_days": 0.0465,
+        "summer": 0.035,
+        "major": 0.0053,
+        "holiday": 0.0016
+      }
+    }
+  }
+}

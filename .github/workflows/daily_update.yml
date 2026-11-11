@@ -1,0 +1,39 @@
+# Runs every morning at about 7:47 AM India time (02:17 UTC).
+# It fetches today's films from TMDB, forecasts them, and saves the results
+# back into this repository. Streamlit then shows the new numbers.
+name: Daily update
+
+on:
+  schedule:
+    - cron: "17 2 * * *"
+  workflow_dispatch:        # adds a "Run workflow" button for manual runs
+
+permissions:
+  contents: write           # lets the workflow save the new data files
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install libraries
+        run: pip install -r requirements.txt
+
+      - name: Fetch films from TMDB and forecast them
+        env:
+          TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
+        run: python src/fetch_tmdb.py
+
+      - name: Save results to the repository
+        run: |
+          git config user.name "boxcast-bot"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/live_forecasts.csv data/forecast_history.csv
+          git diff --staged --quiet || git commit -m "Daily forecast update"
+          git push
