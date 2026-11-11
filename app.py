@@ -19,6 +19,7 @@ ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT / "src"))
 from predict import (BREAK_EVEN_MULTIPLE, apply_sequel_anchor, break_even_chance,  # noqa: E402
                      explain, metrics, predict_pre_all, project_in_release)
+from buzz import live_buzz, wiki_title  # noqa: E402
 from style import CSS  # noqa: E402
 from tmdb import TMDB, film_features, poster_url  # noqa: E402
 
@@ -290,6 +291,18 @@ def comparables(f, p):
 
 
 @st.cache_data(ttl=24 * 3600, show_spinner=False)
+def competition(release_date, movie_id, key):
+    return TMDB(key).big_releases_near(release_date, exclude_id=movie_id)
+
+
+@st.cache_data(ttl=12 * 3600, show_spinner=False)
+def wiki_buzz(wikidata_id, release_date, today):
+    title = wiki_title(wikidata_id)
+    views, days_before = live_buzz(title, release_date, today)
+    return views, days_before
+
+
+@st.cache_data(ttl=24 * 3600, show_spinner=False)
 def previous_film(movie_id, key):
     api = TMDB(key)
     return api.previous_installment(api.details(movie_id))
@@ -333,6 +346,19 @@ def film_page(movie_id):
         f["log_prev_gross"] = math.log(prev["revenue"])
         f["franchise_n"] = prev.get("count", 1)
         f["is_sequel"] = 1
+    try:
+        f["competition_big"] = competition(str(f["release_date"]), movie_id, KEY)
+    except Exception:
+        pass
+    buzz_views = None
+    try:
+        buzz_views, days_before = wiki_buzz(f.get("wikidata_id"), str(f["release_date"]),
+                                            str(date.today()))
+        if buzz_views is not None:
+            f["log_wiki_views"] = math.log1p(buzz_views)
+            f["wiki_days_before"] = days_before
+    except Exception:
+        pass
     row = pd.DataFrame([f])
     p = predict_pre_all(row).iloc[0]
     base, drivers = explain(row)
@@ -455,6 +481,15 @@ def film_page(movie_id):
     if prev and not prev_line:
         prev_note = (f'<div class="bc-sub" style="margin:.6rem 0 0">Previous film in the series: '
                      f'{esc(prev["title"])} ({prev["year"]}), {money(prev["revenue"])} worldwide.</div>')
+    signals = []
+    if buzz_views is not None:
+        signals.append(f"Wikipedia page views in the 4 weeks before {'release' if days_out >= 0 else 'today'}: "
+                       f"<b>{buzz_views:,.0f}</b>")
+    if pd.notna(f.get("competition_big")):
+        n = int(f["competition_big"])
+        signals.append(f"Other $50M+ films opening within a week: <b>{n}</b>")
+    signals.append(f"Cinema release in China: <b>{'yes' if f.get('china_release') else 'not announced'}</b>")
+    prev_note += ('<div class="bc-sub" style="margin:.8rem 0 0">' + "<br>".join(signals) + "</div>")
     heading = "Why this number" if mode == "forecast" else "What the pre-release model saw"
     st.html(f'<div class="bc-section">{heading}</div>'
             f'<div class="bc-sub">A typical film in our data earns {money(base)} worldwide. '
@@ -469,6 +504,27 @@ def film_page(movie_id):
 # ------------------------------------------------------------------ about
 def about():
     M = metrics()
+    from predict import model_features
+    used = set(model_features("pre"))
+    through = M.get("trained_through_year", 2019)
+    extra = []
+    if "log_prev_gross" in used:
+        extra.append("what the previous film in the series earned")
+    if "log_wiki_views" in used:
+        extra.append("online buzz (Wikipedia page views before release)")
+    if "china_release" in used:
+        extra.append("whether it opens in China")
+    if "competition_big" in used:
+        extra.append("how many other big films open the same week")
+    extra_txt = (" It also weighs " + ", ".join(extra[:-1]) + (" and " if len(extra) > 1 else "")
+                 + extra[-1] + ".") if extra else ""
+    comp = M["pre_release"].get("feature_comparison")
+    comp_txt = ""
+    if comp and comp.get("signals_tested"):
+        comp_txt = (f" In a head-to-head test on the same unseen films, adding the market signals "
+                    f"took the typical error from {comp['without_new_signals']:.0f}% to "
+                    f"{comp['with_new_signals']:.0f}%.")
+    missing = ["marketing spend", "reviews"] + ([] if "log_wiki_views" in used else ["online buzz"])
     pre, us, live = M["pre_release"], M["pre_release_us"], M["in_release_projection"]
     e = live["median_abs_pct_error"]
     stages = [("Before release", pre["median_abs_pct_error"]),
@@ -491,11 +547,11 @@ def about():
     <div class="bc-funnel">{rows}</div>
     <div class="bc-prose">
       <h3>Before release</h3>
-      <p>The forecast learns from {len(load("pre_release.csv")):,} US releases from 1990 to 2019:
+      <p>The forecast learns from {len(load("pre_release.csv")):,} releases from 1990 to {through}:
       budget, genre, age rating, runtime, release timing, studio, whether it's a sequel, and the
-      past box office of the lead star and director. For sequels it also leans on what the
-      previous film in the series earned. It predicts worldwide gross, plus the US opening
-      weekend (typical error {us['opening_weekend']['median_abs_pct_error']:.0f}%) and US total
+      past box office of the lead star and director.{extra_txt}{comp_txt} It predicts worldwide
+      gross, plus the US opening weekend (typical error
+      {us['opening_weekend']['median_abs_pct_error']:.0f}%) and US total
       ({us['domestic_total']['median_abs_pct_error']:.0f}%).</p>
       <p>Before a film opens nobody knows whether audiences will love it, so this is the hardest
       forecast to make. Every forecast comes with a range, and in testing that range contained
@@ -513,10 +569,10 @@ def about():
       outcome, with the range calibrated on recent films so it stays honest. "Why this number"
       breaks each forecast into the contribution of each factor.</p>
       <h3>Limits</h3>
-      <p>Figures aren't adjusted for inflation, the pre-release training data ends in 2019,
-      international hits driven by one market (such as China) are hard to foresee, and
-      marketing spend, trailer buzz and reviews aren't included yet. Box office totals come
-      from TMDB and can lag by a few days.</p>
+      <p>Figures aren't adjusted for inflation, the pre-release training data ends in {through},
+      surprise hits in a single market are hard to foresee, and {", ".join(missing[:-1])} and
+      {missing[-1]} aren't included yet. Box office totals come from TMDB and can lag by a few
+      days.</p>
     </div>""")
 
 

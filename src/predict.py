@@ -148,6 +148,9 @@ DRIVER_GROUPS = {
     "Age rating": ["rating"],
     "Studio": ["studio"],
     "Previous film in the series": ["log_prev_gross", "franchise_n"],
+    "Online buzz (Wikipedia views)": ["log_wiki_views", "wiki_days_before"],
+    "China release": ["china_release"],
+    "Competition that week": ["competition_big"],
 }
 
 

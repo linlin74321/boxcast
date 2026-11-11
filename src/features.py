@@ -54,6 +54,9 @@ PRE_FEATURES = ["log_budget", "runtime", "month", "year", "is_sequel",
                 "genre", "rating", "studio"]
 # Added once the Retrain workflow has fetched franchise history from TMDB
 PRE_FEATURES_FRANCHISE = PRE_FEATURES + ["log_prev_gross", "franchise_n"]
+# Market signals: China release, competition that weekend, Wikipedia buzz
+PRE_FEATURES_SIGNALS = PRE_FEATURES_FRANCHISE + ["china_release", "competition_big",
+                                                 "log_wiki_views", "wiki_days_before"]
 PRE_CATEGORIES = {"genre": GENRES, "rating": RATINGS, "studio": STUDIOS}
 
 

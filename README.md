@@ -76,7 +76,8 @@ Open your Streamlit app: the **In cinemas and coming soon** strip now shows fore
 From now on it updates **every morning at about 7:47 AM India time**, automatically.
 
 ### Step 6: Retrain the model with recent films (once, about 30–60 minutes)
-This teaches the model 2020–2025 releases and every film's franchise history.
+This teaches the model 2020–2025 releases, every film's franchise history, China
+releases, competition and online buzz (Wikipedia page views before release).
 1. Make sure your TMDB key is saved in **GitHub → Settings → Secrets and variables → Actions**
    as `TMDB_API_KEY` (Step 5b).
 2. Open the **Actions** tab, pick **Retrain models**, then **Run workflow → Run workflow**.
@@ -113,7 +114,8 @@ src/predict.py             loads the models and makes forecasts
 src/tmdb.py                talks to TMDB (title search, film details)
 src/style.py               the look: colours, fonts, layout
 src/fetch_tmdb.py          the daily update (TMDB → forecasts)
-src/enrich_tmdb.py         fetches franchise history and 2020+ films (Retrain workflow)
+src/enrich_tmdb.py         fetches franchise history, 2020+ films, China releases (Retrain workflow)
+src/buzz.py                online buzz: Wikipedia page views before release
 static/fonts/              the Archivo font (open licence, OFL)
 data/                      training tables, test results, live forecasts
 models/                    the trained models + metrics.json (accuracy numbers)

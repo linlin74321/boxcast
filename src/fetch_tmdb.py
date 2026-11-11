@@ -18,6 +18,7 @@ import requests
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from predict import apply_sequel_anchor, predict_pre_all, project_in_release  # noqa: E402
+from buzz import live_buzz, wiki_title  # noqa: E402
 from tmdb import TMDB, film_features  # noqa: E402
 
 DATA = Path(__file__).resolve().parents[1] / "data"
@@ -30,7 +31,7 @@ def run(key):
         for f in api.listing(which, pages=4):
             films.setdefault(f["id"], status)
 
-    rows, prevs = [], {}
+    rows, prevs, comp_cache = [], {}, {}
     for tmdb_id, status in films.items():
         try:
             d = api.details(tmdb_id)
@@ -46,6 +47,21 @@ def run(key):
                                 franchise_n=prev.get("count", 1), is_sequel=1)
         except Exception as e:
             print(f"no franchise info for {tmdb_id}: {e}")
+        f = rows[-1]
+        try:                    # competition that week (shared between films of the same week)
+            week = str(pd.Timestamp(f["release_date"]).to_period("W"))
+            if week not in comp_cache:
+                comp_cache[week] = api.big_releases_near(f["release_date"])
+            # the count above may include this film itself if it's a $50M+ release
+            f["competition_big"] = max(comp_cache[week] - int((f["budget"] or 0) >= 50e6), 0)
+        except Exception as e:
+            print(f"no competition info for {tmdb_id}: {e}")
+        try:                    # Wikipedia buzz
+            views, days_before = live_buzz(wiki_title(f.get("wikidata_id")), f["release_date"], date.today())
+            if views is not None:
+                f["log_wiki_views"], f["wiki_days_before"] = math.log1p(views), days_before
+        except Exception as e:
+            print(f"no buzz info for {tmdb_id}: {e}")
         time.sleep(0.05)
 
     live = pd.DataFrame(rows).dropna(subset=["release_date"]).reset_index(drop=True)

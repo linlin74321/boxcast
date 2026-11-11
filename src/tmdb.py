@@ -70,7 +70,7 @@ class TMDB:
 
     def details(self, movie_id):
         return self.get(f"/movie/{movie_id}",
-                        append_to_response="credits,release_dates,similar")
+                        append_to_response="credits,release_dates,external_ids")
 
     def previous_installment(self, details):
         """The most recent earlier film in the same TMDB collection (franchise),
@@ -87,6 +87,22 @@ class TMDB:
                 return {"title": d.get("title"), "year": d["release_date"][:4],
                         "revenue": d["revenue"], "count": len(earlier)}
         return None
+
+    def big_releases_near(self, release_date, exclude_id=None, days=7, big_budget=50e6):
+        """How many OTHER $50M+ films open in the US within a week either side."""
+        rel = pd.Timestamp(release_date)
+        res = self.get("/discover/movie", region="US", with_release_type="2|3",
+                       sort_by="popularity.desc", page=1,
+                       **{"primary_release_date.gte": (rel - pd.Timedelta(days=days)).strftime("%Y-%m-%d"),
+                          "primary_release_date.lte": (rel + pd.Timedelta(days=days)).strftime("%Y-%m-%d")})
+        count = 0
+        for m in res.get("results", [])[:12]:
+            if m["id"] == exclude_id:
+                continue
+            d = self.get(f"/movie/{m['id']}")
+            if (d.get("budget") or 0) >= big_budget:
+                count += 1
+        return count
 
     def listing(self, which, pages=1):
         out = []
@@ -132,6 +148,8 @@ def film_features(details, status=None):
     s_pow, s_n = person_power(star, "star")
     d_pow, d_n = person_power(director, "director")
     budget = details.get("budget") or np.nan
+    china = any(c["iso_3166_1"] == "CN" and any(r["type"] in (2, 3) for r in c["release_dates"])
+                for c in details.get("release_dates", {}).get("results", []))
     return {
         "tmdb_id": details["id"],
         "title": details.get("title"),
@@ -161,4 +179,9 @@ def film_features(details, status=None):
         "tagline": details.get("tagline"),
         "log_prev_gross": np.nan,     # filled in when the previous film is known
         "franchise_n": 0,
+        "china_release": int(china),
+        "wikidata_id": details.get("external_ids", {}).get("wikidata_id"),
+        "competition_big": np.nan,    # filled in by the app / daily update
+        "log_wiki_views": np.nan,
+        "wiki_days_before": np.nan,
     }

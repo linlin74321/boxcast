@@ -85,6 +85,20 @@ switches to films released from 2022 onwards. A safety check only replaces the e
 model if the new one is more accurate on those unseen films. (Before retraining, the app
 applies a simple fixed rule instead: sequels typically earn ~0.86× their predecessor.)
 
+**Market signals (added to the Retrain workflow).**
+- *Online buzz:* daily views of the film's English Wikipedia page, summed over the 4 weeks
+  ending 7, 30, 60 and 90 days before release (Wikimedia's free pageviews API; data from
+  mid-2015). Each film with buzz data contributes one training row per distance from release,
+  weighted ¼, so the model learns how buzz builds and can compare an upcoming film with past
+  films at the same distance. Daily data is timestamped, so only pre-release views are used.
+  Based on Mestyán, Yasseri & Kertész (PLOS ONE, 2013).
+- *China release:* whether TMDB lists a cinema release in China. A China release can multiply a
+  film's worldwide total.
+- *Competition:* how many other $50M+ films open within a week either side.
+- *Fair test:* the retrain trains the model with and without these signals on the same unseen
+  films and keeps the more accurate version. Both numbers are saved in `models/metrics.json`
+  (`feature_comparison`) and shown on the app's "How it works" page.
+
 **Why not trailer views?** Today's view count for an old trailer mostly reflects whether the
 film became a hit, which happened *after* release. Training on it would leak the answer:
 great test scores, useless real forecasts. A clean buzz signal needs views recorded before

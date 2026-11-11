@@ -24,7 +24,9 @@ import numpy as np
 import pandas as pd
 from sklearn.linear_model import LinearRegression
 
-from features import POST_FEATURES, PRE_FEATURES, PRE_FEATURES_FRANCHISE, pre_model_frame
+from buzz import HORIZONS
+from features import (POST_FEATURES, PRE_FEATURES, PRE_FEATURES_FRANCHISE,
+                      PRE_FEATURES_SIGNALS, pre_model_frame)
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA, MODELS = ROOT / "data", ROOT / "models"
@@ -36,9 +38,30 @@ PARAMS = dict(objective="quantile", learning_rate=0.03, n_estimators=500,
               subsample_freq=1, colsample_bytree=0.8, verbose=-1)
 
 
-def fit_quantiles(X, y):
-    return {name: lgb.LGBMRegressor(alpha=a, **PARAMS).fit(X, y)
+def fit_quantiles(X, y, weights=None):
+    return {name: lgb.LGBMRegressor(alpha=a, **PARAMS).fit(X, y, sample_weight=weights)
             for name, a in QUANTILES.items()}
+
+
+def with_buzz(df, horizon=None):
+    """Attach the Wikipedia-buzz inputs.
+    horizon=None: films with buzz data get one training row per distance from
+    release (7/30/60/90 days, each weighted 1/4), so the model learns how buzz
+    builds up. horizon=30: one row per film, buzz measured 30 days out (used
+    for testing and calibration)."""
+    cols = [f"wiki_{h}" for h in HORIZONS]
+    has = df[cols].notna().any(axis=1) if set(cols) <= set(df.columns) else pd.Series(False, index=df.index)
+    def at(sub, h, weight):
+        sub = sub.copy()
+        sub["log_wiki_views"] = np.log1p(sub[f"wiki_{h}"]) if f"wiki_{h}" in sub else np.nan
+        sub["wiki_days_before"] = np.where(sub["log_wiki_views"].notna(), h, np.nan)
+        sub["w"] = weight
+        return sub
+    if horizon is not None:
+        return at(df, horizon, 1.0)
+    parts = [df[~has].assign(log_wiki_views=np.nan, wiki_days_before=np.nan, w=1.0)]
+    parts += [at(df[has], h, 1 / len(HORIZONS)) for h in HORIZONS]
+    return pd.concat(parts, ignore_index=True)
 
 
 def predict_quantiles(models, X, widen=0.0):
@@ -49,12 +72,12 @@ def predict_quantiles(models, X, widen=0.0):
     return preds
 
 
-def calibration_widen(X_fit, y_fit, X_cal, y_cal, target=0.8):
+def calibration_widen(X_fit, y_fit, X_cal, y_cal, target=0.8, weights=None):
     """Conformal calibration: raw quantile models are usually over-confident.
     We hold back the most recent slice of the training data, see how far
     actual results fell outside the predicted range, and widen the range just
     enough that ~80% of real outcomes land inside it."""
-    m = fit_quantiles(X_fit, y_fit)
+    m = fit_quantiles(X_fit, y_fit, weights)
     p = predict_quantiles(m, X_cal)
     miss = np.maximum(p[:, 0] - y_cal, y_cal - p[:, 2])
     n = len(miss)
@@ -103,16 +126,33 @@ def old_model_error(prefix, test, target_money):
         return None
 
 
+def prepared(df, features):
+    """(training rows, single-row-per-film evaluation rows) for a feature set."""
+    if "log_wiki_views" in features:
+        return with_buzz(df), with_buzz(df, 30)
+    return df.assign(w=1.0), df.assign(w=1.0)
+
+
+def fit_eval(train, test, fit_, cal_, features, target, money):
+    """Train on `train`, calibrate on fit_/cal_, score on `test`."""
+    tr, _ = prepared(train, features)
+    fi, _ = prepared(fit_, features)
+    _, ca = prepared(cal_, features)
+    _, te = prepared(test, features)
+    widen = calibration_widen(pre_model_frame(fi, features), fi[target],
+                              pre_model_frame(ca, features), ca[target], weights=fi["w"])
+    models = fit_quantiles(pre_model_frame(tr, features), tr[target], tr["w"])
+    q = np.exp(predict_quantiles(models, pre_model_frame(te, features), widen))
+    m = score(te[money].values, *q.T)
+    m["range_widen_log"] = round(widen, 4)
+    return m, models, q, te
+
+
 def train_pre(features):
     df = pd.read_csv(DATA / "pre_release.csv", parse_dates=["release_date"])
     train, test, fit_, cal_, period = pre_split(df)
-    widen = calibration_widen(pre_model_frame(fit_, features), fit_["log_gross"],
-                              pre_model_frame(cal_, features), cal_["log_gross"])
-    models = fit_quantiles(pre_model_frame(train, features), train["log_gross"])
-    q = np.exp(predict_quantiles(models, pre_model_frame(test, features), widen))
-    metrics = score(test["gross"].values, *q.T)
+    metrics, models, q, te = fit_eval(train, test, fit_, cal_, features, "log_gross", "gross")
     metrics["test_period"] = period
-    metrics["range_widen_log"] = round(widen, 4)
 
     # Baseline to beat: a straight line on budget alone
     tb, sb = train.dropna(subset=["log_budget"]), test.dropna(subset=["log_budget"])
@@ -120,21 +160,53 @@ def train_pre(features):
     base = np.exp(lr.predict(sb[["log_budget"]]))
     metrics["baseline_budget_only_median_abs_pct_error"] = round(
         float(np.median(np.abs(base - sb["gross"]) / sb["gross"])) * 100, 1)
-    if "prev_gross" in test:
-        seq = test["log_prev_gross"].notna().values
-        if seq.sum() >= 10:
-            metrics["sequels_median_abs_pct_error"] = round(float(np.median(
-                np.abs(q[seq, 1] - test["gross"].values[seq]) / test["gross"].values[seq])) * 100, 1)
+    seq = te["log_prev_gross"].notna().values if "log_prev_gross" in te else np.zeros(len(te), bool)
+    if seq.sum() >= 10:
+        metrics["sequels_median_abs_pct_error"] = round(float(np.median(
+            np.abs(q[seq, 1] - te["gross"].values[seq]) / te["gross"].values[seq])) * 100, 1)
+    if "log_wiki_views" in features:
+        # How accuracy changes with distance from release, for films with buzz data
+        by_h = {}
+        for h in HORIZONS:
+            th = with_buzz(test, h)
+            th = th[th["log_wiki_views"].notna()]
+            if len(th) >= 20:
+                p = np.exp(models["mid"].predict(pre_model_frame(th, features)))
+                by_h[f"{h}_days_before"] = round(float(np.median(np.abs(p - th["gross"]) / th["gross"])) * 100, 1)
+        metrics["buzz_films_error_by_days_before_release"] = by_h
 
-    out = test[["name", "year", "genre", "budget", "gross"]].copy()
+    out = te[["name", "year", "genre", "budget", "gross"]].copy()
     out["pred_low"], out["pred_mid"], out["pred_high"] = q.T
     importance = pd.Series(models["mid"].booster_.feature_importance("gain"), index=features)
     importance = (importance / importance.sum()).round(4).sort_values(ascending=False).to_dict()
 
     old_err = old_model_error("pre", test, "gross")
-    final = fit_quantiles(pre_model_frame(df, features), df["log_gross"])
+    full, _ = prepared(df, features)
+    final = fit_quantiles(pre_model_frame(full, features), full["log_gross"], full["w"])
     return {"metrics": metrics, "importance": importance, "test_predictions": out,
             "final": final, "old_error": old_err, "trained_through": int(df["year"].max())}
+
+
+def choose_features():
+    """Fair comparison on the same unseen films: are the new market signals
+    (China release, competition, Wikipedia buzz) worth adding?"""
+    df = pd.read_csv(DATA / "pre_release.csv", parse_dates=["release_date"])
+    has_franchise = df.get("log_prev_gross", pd.Series(dtype=float)).notna().sum() >= 100
+    basic = PRE_FEATURES_FRANCHISE if has_franchise else PRE_FEATURES
+    has_signals = (df.get("china_release", pd.Series(dtype=float)).notna().sum() >= 100
+                   or df.get("wiki_30", pd.Series(dtype=float)).notna().sum() >= 100)
+    signals = PRE_FEATURES_SIGNALS if has_signals else basic + ["competition_big"]
+    train, test, fit_, cal_, _ = pre_split(df)
+    without, *_ = fit_eval(train, test, fit_, cal_, basic, "log_gross", "gross")
+    with_, *_ = fit_eval(train, test, fit_, cal_, signals, "log_gross", "gross")
+    a, b = without["median_abs_pct_error"], with_["median_abs_pct_error"]
+    chosen = signals if b <= a - 0.3 else basic
+    comparison = {"without_new_signals": a, "with_new_signals": b,
+                  "signals_tested": [f for f in signals if f not in basic],
+                  "chosen": "with new signals" if chosen is signals else "without new signals"}
+    print(f"Feature comparison on the same unseen films: without {a}% vs with {b}% "
+          f"-> using {comparison['chosen']}")
+    return chosen, comparison
 
 
 def train_pre_us(features):
@@ -142,15 +214,11 @@ def train_pre_us(features):
     df = pd.read_csv(DATA / "pre_us.csv", parse_dates=["release_date"])
     out, finals = {}, {}
     train, test, fit_, cal_, period = pre_split(df)
+    full, _ = prepared(df, features)
     for tag, target, money in (("open", "log_w1", "w1"), ("dom", "log_dom", "lifetime")):
-        widen = calibration_widen(pre_model_frame(fit_, features), fit_[target],
-                                  pre_model_frame(cal_, features), cal_[target])
-        models = fit_quantiles(pre_model_frame(train, features), train[target])
-        q = np.exp(predict_quantiles(models, pre_model_frame(test, features), widen))
-        m = score(test[money].values, *q.T)
-        m["range_widen_log"] = round(widen, 4)
+        m, *_ = fit_eval(train, test, fit_, cal_, features, target, money)
         out[tag] = m
-        finals[tag] = fit_quantiles(pre_model_frame(df, features), df[target])
+        finals[tag] = fit_quantiles(pre_model_frame(full, features), full[target], full["w"])
     out["test_period"] = period
     return out, finals
 
@@ -217,10 +285,8 @@ def eval_in_release():
 
 if __name__ == "__main__":
     pre_df = pd.read_csv(DATA / "pre_release.csv")
-    has_franchise = pre_df.get("log_prev_gross", pd.Series(dtype=float)).notna().sum() >= 100
-    features = PRE_FEATURES_FRANCHISE if has_franchise else PRE_FEATURES
-    print(f"Pre-release features: {'with' if has_franchise else 'without'} franchise history; "
-          f"{len(pre_df):,} films up to {pre_df['year'].max()}")
+    print(f"Training data: {len(pre_df):,} films up to {pre_df['year'].max()}")
+    features, comparison = choose_features()
 
     pre = train_pre(features)
     us_metrics, us_finals = train_pre_us(features)
@@ -245,7 +311,8 @@ if __name__ == "__main__":
         pre["test_predictions"].to_csv(DATA / "test_predictions_pre.csv", index=False)
         report = {
             "trained_through_year": pre["trained_through"],
-            "pre_release": {"target": "worldwide lifetime gross", **pre["metrics"]},
+            "pre_release": {"target": "worldwide lifetime gross", **pre["metrics"],
+                            "feature_comparison": comparison},
             "pre_release_us": {"test_period": us_metrics["test_period"],
                                "opening_weekend": us_metrics["open"],
                                "domestic_total": us_metrics["dom"]},

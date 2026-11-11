@@ -15,6 +15,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from buzz import HORIZONS
 from features import (clean_genre, clean_rating, is_major, is_sequel,
                       studio_group)
 
@@ -50,6 +51,15 @@ def prior_power(df, person_col):
     return power, count
 
 
+def competition_count(df, days=7, big_budget=50e6):
+    """For each film, how many OTHER big-budget films opened within `days`."""
+    big = np.sort(df.loc[df["budget"] >= big_budget, "release_date"].values.astype("datetime64[D]"))
+    when = df["release_date"].values.astype("datetime64[D]")
+    lo = np.searchsorted(big, when - np.timedelta64(days, "D"), side="left")
+    hi = np.searchsorted(big, when + np.timedelta64(days, "D"), side="right")
+    return (hi - lo) - (df["budget"] >= big_budget).astype(int).values
+
+
 def build_pre_release(movies):
     """IMDb films 1990-2019, plus (when the Retrain workflow has fetched them)
     TMDB franchise history and 2020+ releases."""
@@ -73,24 +83,42 @@ def build_pre_release(movies):
     base.to_csv(OUT / "pre_release_imdb.csv", index=False)
 
     df = base.copy()
-    df["prev_gross"], df["franchise_n"] = np.nan, 0
-    hist_path, recent_path = OUT / "tmdb_history.csv", OUT / "tmdb_recent.csv"
+    df["prev_gross"], df["franchise_n"], df["china_release"] = np.nan, 0, np.nan
+    df["wkey"] = df["name"] + "|" + df["year"].astype(str)
+    hist_path, recent_path, wiki_path = (OUT / "tmdb_history.csv", OUT / "tmdb_recent.csv",
+                                         OUT / "wiki_views.csv")
     if hist_path.exists():
         h = pd.read_csv(hist_path).drop_duplicates("key", keep="last").set_index("key")
-        keys = df["name"] + "|" + df["year"].astype(str)
-        df["prev_gross"] = keys.map(h["prev_gross"]).values
-        df["franchise_n"] = keys.map(h["franchise_n"]).fillna(0).values
+        df["prev_gross"] = df["wkey"].map(h["prev_gross"]).values
+        df["franchise_n"] = df["wkey"].map(h["franchise_n"]).fillna(0).values
+        if "china_release" in h:
+            df["china_release"] = df["wkey"].map(h["china_release"]).values
     if recent_path.exists():
         r = pd.read_csv(recent_path, parse_dates=["release_date"]).drop_duplicates("tmdb_id")
         r = r.rename(columns={"title": "name"})
         r["year"] = r["release_date"].dt.year
         r["is_sequel"] = [is_sequel(t, c) for t, c in zip(r["name"], r["in_collection"])]
         r["source"] = "tmdb"
+        r["wkey"] = "tmdb:" + r["tmdb_id"].astype("Int64").astype(str)
+        if "china_release" not in r:
+            r["china_release"] = np.nan
         covid = (r["release_date"] >= "2020-01-15") & (r["release_date"] <= "2021-06-30")
         r = r[~covid & r["release_date"].notna()]
         df = pd.concat([df, r[df.columns.intersection(r.columns)]], ignore_index=True)
     df["franchise_n"] = df["franchise_n"].fillna(0)
     df["is_sequel"] = ((df["is_sequel"] == 1) | (df["franchise_n"] > 0)).astype(int)
+
+    # Online buzz: Wikipedia views before release (see buzz.py)
+    for hz in HORIZONS:
+        df[f"wiki_{hz}"] = np.nan
+    if wiki_path.exists():
+        w = pd.read_csv(wiki_path).drop_duplicates("key", keep="last").set_index("key")
+        for hz in HORIZONS:
+            if f"wiki_{hz}" in w:
+                df[f"wiki_{hz}"] = df["wkey"].map(w[f"wiki_{hz}"]).values
+
+    # Competition: other $50M+ films opening within a week either side
+    df["competition_big"] = competition_count(df)
 
     df["log_gross"] = np.log(df["gross"])
     df["log_budget"] = np.log(df["budget"].where(df["budget"] > 0))   # NaN when unknown
