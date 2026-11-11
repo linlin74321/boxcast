@@ -502,78 +502,199 @@ def film_page(movie_id):
 
 
 # ------------------------------------------------------------------ about
+def hbar_rows(items, max_value, label_fmt="{:.0f}%"):
+    """Horizontal bars: items = [(label, value, colour)]. Direct-labelled, with hover text."""
+    return "".join(
+        f'<div class="bc-hbar"><div class="t">{esc(t)}</div>'
+        f'<div class="bar-wrap"><div class="bar" style="width:{max(v / max_value * 100, 1.5):.1f}%;'
+        f'background:{c}" title="{esc(t)}: {label_fmt.format(v)}"></div></div>'
+        f'<div class="v">{label_fmt.format(v)}</div></div>' for t, v, c in items)
+
+
+def flow_html(used):
+    """How a forecast is made: the input columns, the models, the outputs."""
+    groups = [("Film basics", ["Production budget", "Genre", "Age rating", "Runtime", "Studio",
+                               "Release month and year"], True),
+              ("People", ["Lead star's past box office", "Director's past box office",
+                          "How many films each has made"], True),
+              ("Franchise", ["Previous film in the series: its worldwide gross",
+                             "How many films came before"], "log_prev_gross" in used),
+              ("Market signals", [x for x, f in (("Wikipedia page views before release", "log_wiki_views"),
+                                                 ("Opening in China", "china_release"),
+                                                 ("Big films opening the same week", "competition_big"))
+                                  if f in used], any(f in used for f in ("log_wiki_views", "china_release",
+                                                                        "competition_big")))]
+    cols = "".join(f'<div class="bc-col"><h4>{g}</h4><ul>' + "".join(f"<li>{esc(i)}</li>" for i in items)
+                   + "</ul></div>" for g, items, show in groups if show)
+    return f"""<div class="bc-flow">
+      <div class="bc-cols">{cols}</div>
+      <div class="bc-arrow" aria-hidden="true">↓</div>
+      <div class="bc-stage"><b>Three gradient-boosted tree models</b> learn from every column at once:
+        one for a low case, one for the likely outcome, one for a high case
+        <small>trained on {len(load("pre_release.csv")):,} films; each split asks a question like
+        "budget over $90M?" and thousands of small trees add up</small></div>
+      <div class="bc-arrow" aria-hidden="true">↓</div>
+      <div class="bc-stage"><b>Range calibration</b>: widened until it caught the real result about
+        80% of the time on recent films<small>so the range is honest, not optimistic</small></div>
+      <div class="bc-arrow" aria-hidden="true">↓</div>
+      <div class="bc-outs"><div class="bc-out">Worldwide total</div><div class="bc-out">US opening weekend</div>
+        <div class="bc-out">US and Canada total</div><div class="bc-out">Chance to break even</div></div>
+      <div class="bc-life">
+        <div><b><i>1</i>Before release</b><span>The forecast above, from the columns alone.</span></div>
+        <div><b><i>2</i>In cinemas</b><span>Earnings so far (from TMDB) ÷ the share a typical film
+          has earned by that day = projected final total.</span></div>
+        <div><b><i>3</i>Finished</b><span>The actual total, its return on budget, and how the
+          forecast compared.</span></div>
+      </div></div>"""
+
+
+def example_film(name):
+    """A real film from the test: what the model saw, and how it did."""
+    test, pre = load("test_predictions_pre.csv"), load("pre_release.csv")
+    t = test[test["name"] == name].iloc[0]
+    rows = pre[(pre["name"] == t["name"]) & (pre["year"] == t["year"])]
+    if rows.empty:
+        return ""
+    r = rows.iloc[0]
+    def val(v, fmt=str):
+        return "—" if v is None or (isinstance(v, float) and np.isnan(v)) else fmt(v)
+    items = [("Budget", val(r.get("budget"), money)), ("Genre / age rating", f"{r['genre']} / {r['rating']}"),
+             ("Runtime", val(r.get("runtime"), lambda x: f"{int(x)} min")), ("Studio", r["studio"]),
+             ("Release", nice_date(r["release_date"])),
+             ("Lead star's past films (avg)", val(r.get("star_power"), lambda x: money(math.exp(x)))),
+             ("Director's past films (avg)", val(r.get("director_power"), lambda x: money(math.exp(x)))),
+             ("Previous film in the series", val(r.get("prev_gross"), money)),
+             ("Opening in China", {1: "Yes", 0: "No"}.get(r.get("china_release"), "—")),
+             ("Big films opening the same week", val(r.get("competition_big"), lambda x: str(int(x)))),
+             ("Wikipedia views, 4 weeks to 30 days out", val(r.get("wiki_30"), lambda x: f"{x:,.0f}"))]
+    inside = t["pred_low"] <= t["gross"] <= t["pred_high"]
+    off = (t["pred_mid"] - t["gross"]) / t["gross"] * 100
+    table = "".join(f"<tr><td>{esc(k)}</td><td>{esc(str(v))}</td></tr>" for k, v in items)
+    return f"""<table class="bc-kv">{table}</table>
+      <div class="bc-figs">
+        {fig("Forecast before release", money(t['pred_mid']), f"{money(t['pred_low'])} to {money(t['pred_high'])}")}
+        {fig("Actual worldwide", money(t['gross']), "")}
+        {fig("Result", f"{abs(off):.0f}% {'over' if off > 0 else 'under'}",
+             '<span class="bc-good">✓ inside the range</span>' if inside else
+             '<span class="bc-risk">! outside the range</span>')}
+      </div>"""
+
+
+def example_picker():
+    """Let the reader pick any film from the test, hits and misses alike."""
+    test = load("test_predictions_pre.csv")
+    if test is None or test["year"].max() < 2022:
+        return
+    test = test.sort_values("gross", ascending=False).drop_duplicates("name")
+    films = test["name"].tolist()
+    # Start on the biggest film whose result landed inside its range (the typical case)
+    inside = test[(test["gross"] >= test["pred_low"]) & (test["gross"] <= test["pred_high"])]
+    default = inside["name"].iloc[0] if len(inside) else films[0]
+    st.html('<div class="bc-section">One film, start to finish</div>'
+            '<div class="bc-sub">Pick any of the films the model was tested on, hits and misses alike. '
+            'A model trained only on films up to 2021 saw these columns and nothing else.</div>')
+    name = st.selectbox("Film from the test", films, index=films.index(default),
+                        label_visibility="collapsed", key="example_film")
+    st.html(example_film(name))
+
+
+def scatter_chart():
+    """Forecast vs actual for every unseen test film."""
+    import plotly.graph_objects as go
+    test = load("test_predictions_pre.csv")
+    if test is None:
+        return None
+    lo, hi = max(test["gross"].min(), 1e5) * 0.6, test["gross"].max() * 1.6
+    xs = np.geomspace(lo, hi, 50)
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=np.r_[xs, xs[::-1]], y=np.r_[xs * 1.5, (xs * 0.5)[::-1]], fill="toself",
+                             fillcolor="rgba(238,241,246,0.06)", line=dict(width=0), hoverinfo="skip",
+                             name="Within ±50%"))
+    fig.add_trace(go.Scatter(x=xs, y=xs, mode="lines", line=dict(color="#8C97AB", width=1.5, dash="dot"),
+                             hoverinfo="skip", name="Perfect forecast"))
+    fig.add_trace(go.Scatter(
+        x=test["gross"], y=test["pred_mid"], mode="markers", name="A film",
+        marker=dict(color="#B38A14", size=8, opacity=0.75, line=dict(color="#141A26", width=1)),
+        customdata=np.c_[test["name"], test["year"]],
+        hovertemplate="<b>%{customdata[0]}</b> (%{customdata[1]})<br>Actual $%{x:,.0f}"
+                      "<br>Forecast $%{y:,.0f}<extra></extra>"))
+    fig.update_layout(height=520, margin=dict(l=10, r=10, t=10, b=10), paper_bgcolor="rgba(0,0,0,0)",
+                      plot_bgcolor="rgba(0,0,0,0)", font=dict(family="Archivo, sans-serif", color="#C4CBD8", size=13),
+                      legend=dict(orientation="h", y=1.04, x=0, bgcolor="rgba(0,0,0,0)"),
+                      hoverlabel=dict(bgcolor="#232D40", bordercolor="#232D40", font=dict(color="#EEF1F6")))
+    ticks = [v for v in (1e5, 1e6, 1e7, 1e8, 1e9, 1e10) if lo <= v <= hi]
+    for ax, title in ((fig.update_xaxes, "Actual worldwide gross"), (fig.update_yaxes, "Forecast before release")):
+        ax(type="log", title=title, gridcolor="rgba(238,241,246,0.07)", zeroline=False,
+           tickvals=ticks, ticktext=[money(v).replace(".00", "").replace(".0", "") for v in ticks],
+           range=[math.log10(lo), math.log10(hi)])
+    return fig
+
+
 def about():
+    from predict import DRIVER_GROUPS, model_features
     M = metrics()
-    from predict import model_features
     used = set(model_features("pre"))
-    through = M.get("trained_through_year", 2019)
-    extra = []
-    if "log_prev_gross" in used:
-        extra.append("what the previous film in the series earned")
-    if "log_wiki_views" in used:
-        extra.append("online buzz (Wikipedia page views before release)")
-    if "china_release" in used:
-        extra.append("whether it opens in China")
-    if "competition_big" in used:
-        extra.append("how many other big films open the same week")
-    extra_txt = (" It also weighs " + ", ".join(extra[:-1]) + (" and " if len(extra) > 1 else "")
-                 + extra[-1] + ".") if extra else ""
-    comp = M["pre_release"].get("feature_comparison")
-    comp_txt = ""
-    if comp and comp.get("signals_tested"):
-        comp_txt = (f" In a head-to-head test on the same unseen films, adding the market signals "
-                    f"took the typical error from {comp['without_new_signals']:.0f}% to "
-                    f"{comp['with_new_signals']:.0f}%.")
-    missing = ["marketing spend", "reviews"] + ([] if "log_wiki_views" in used else ["online buzz"])
     pre, us, live = M["pre_release"], M["pre_release_us"], M["in_release_projection"]
+    comp = pre.get("feature_comparison") or {}
     e = live["median_abs_pct_error"]
-    stages = [("Before release", pre["median_abs_pct_error"]),
-              ("After opening weekend", e["after_opening_weekend"]),
-              ("After 1 week", e["after_week_1"]),
-              ("After 2 weeks", e["after_week_2"]),
+    gold, grey, grey2 = "var(--up)", "#4A5568", "#6B7690"
+
+    st.html(f"""<div class="bc-hero"><h1>How BoxCast works</h1>
+      <p>Every forecast is built from the same set of columns about the film, run through models
+      that learned from {len(load("pre_release.csv")):,} past releases. Here's the whole journey,
+      and how well it works on films it had never seen.</p></div>
+      <div class="bc-section">How a forecast is made</div>
+      <div class="bc-sub">The columns on top are everything the model knows about a film.</div>
+      {flow_html(used)}""")
+
+    example_picker()
+
+    # ---- accuracy: head-to-head
+    versions = [("Rule of thumb: budget alone", pre["baseline_budget_only_median_abs_pct_error"], grey)]
+    if comp:
+        versions.append(("Core model: basics, people, franchise", comp["without_new_signals"], grey2))
+        versions.append(("BoxCast with market signals", comp["with_new_signals"], gold))
+    else:
+        versions.append(("BoxCast", pre["median_abs_pct_error"], gold))
+    st.html(f"""<div class="bc-section">How accurate is the forecast before release?</div>
+      <div class="bc-sub">Typical gap between forecast and final worldwide total, on
+      {pre['films_tested']:,} {pre.get('test_period', 'unseen films').split('(')[0].strip()}. Lower is better.</div>
+      {hbar_rows(versions, max(v for _, v, _ in versions) * 1.05)}
+      <div class="bc-sub" style="margin-top:.6rem">{pre['within_50pct']:.0f}% of forecasts landed within ±50%
+      of the real total, and the range caught the real result {pre['range_coverage']:.0f}% of the time.</div>""")
+
+    fig_ = scatter_chart()
+    if fig_ is not None:
+        st.html('<div class="bc-section">Every forecast against what really happened</div>'
+                '<div class="bc-sub">One dot per film. On the dotted line means a perfect forecast; '
+                'the shaded band is within ±50%. Hover a dot to see the film.</div>')
+        st.plotly_chart(fig_, config={"displayModeBar": False})
+
+    # ---- funnel
+    stages = [("Before release", pre["median_abs_pct_error"]), ("After opening weekend", e["after_opening_weekend"]),
+              ("After 1 week", e["after_week_1"]), ("After 2 weeks", e["after_week_2"]),
               ("After 3 weeks", e["after_week_3"])]
-    top = max(v for _, v in stages)
-    rows = "".join(f"""<div class="row"><div>{s}</div>
-        <div><div class="bar" style="width:{v / top * 100:.0f}%" title="{s}: {v}% typical error"></div></div>
-        <div style="text-align:right;font-weight:650">{v:.0f}%</div></div>""" for s, v in stages)
-    st.html(f"""
-    <div class="bc-hero"><h1>How BoxCast works</h1>
-    <p>Search a film and BoxCast picks the right method for where it is in its life:
-    a forecast before release, a projection while it's in cinemas, and the real total
-    once it has finished.</p></div>
-    <div class="bc-section">Typical forecast error on films the model never saw</div>
-    <div class="bc-sub">Median gap between the forecast and the final total. Lower is better.
-    The number tightens fast once real ticket sales exist.</div>
-    <div class="bc-funnel">{rows}</div>
-    <div class="bc-prose">
-      <h3>Before release</h3>
-      <p>The forecast learns from {len(load("pre_release.csv")):,} releases from 1990 to {through}:
-      budget, genre, age rating, runtime, release timing, studio, whether it's a sequel, and the
-      past box office of the lead star and director.{extra_txt}{comp_txt} It predicts worldwide
-      gross, plus the US opening weekend (typical error
-      {us['opening_weekend']['median_abs_pct_error']:.0f}%) and US total
-      ({us['domestic_total']['median_abs_pct_error']:.0f}%).</p>
-      <p>Before a film opens nobody knows whether audiences will love it, so this is the hardest
-      forecast to make. Every forecast comes with a range, and in testing that range contained
-      the real result about 80% of the time.</p>
-      <h3>While it's in cinemas</h3>
-      <p>BoxCast takes the latest worldwide total reported on TMDB and projects the final number
-      from how 2,800 wide releases since 2000 typically earned over
-      their run. No numbers to enter. After three weeks the typical error is about
-      {e['after_week_3']:.0f}%.</p>
-      <h3>After it's finished</h3>
-      <p>You see the actual worldwide total, its return on budget, and how BoxCast's
-      pre-release forecast compared.</p>
-      <h3>The technique</h3>
-      <p>Gradient-boosted decision trees (LightGBM) trained to predict a low, likely and high
-      outcome, with the range calibrated on recent films so it stays honest. "Why this number"
-      breaks each forecast into the contribution of each factor.</p>
+    st.html(f"""<div class="bc-section">The forecast sharpens once tickets are sold</div>
+      <div class="bc-sub">Typical error at each stage of a film's life. In cinemas, BoxCast projects the
+      final total from the latest earnings on TMDB.</div>
+      {hbar_rows([(s_, v, gold) for s_, v in stages], max(v for _, v in stages) * 1.05)}""")
+
+    # ---- drivers
+    imp = M.get("importance", {}).get("pre_release", {})
+    grouped = [(name, sum(imp.get(f, 0) for f in feats) * 100) for name, feats in DRIVER_GROUPS.items()]
+    grouped = sorted([g for g in grouped if g[1] > 0.5], key=lambda g: -g[1])
+    if grouped:
+        st.html('<div class="bc-section">What the model leans on most</div>'
+                '<div class="bc-sub">Share of the model\u2019s decisions that use each column group.</div>'
+                + hbar_rows([(n, v, gold) for n, v in grouped], grouped[0][1] * 1.05))
+
+    st.html(f"""<div class="bc-prose">
       <h3>Limits</h3>
-      <p>Figures aren't adjusted for inflation, the pre-release training data ends in {through},
-      surprise hits in a single market are hard to foresee, and {", ".join(missing[:-1])} and
-      {missing[-1]} aren't included yet. Box office totals come from TMDB and can lag by a few
-      days.</p>
-    </div>""")
+      <p>Figures aren't adjusted for inflation, surprise hits in a single market are hard to foresee,
+      and marketing spend and reviews aren't included yet. Box office totals come from TMDB and can
+      lag by a few days. US opening weekend forecasts have a typical error of
+      {us['opening_weekend']['median_abs_pct_error']:.0f}%, and the US total
+      {us['domestic_total']['median_abs_pct_error']:.0f}%.</p></div>""")
 
 
 # ------------------------------------------------------------------ router
