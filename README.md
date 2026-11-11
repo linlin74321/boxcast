@@ -1,8 +1,8 @@
 # 🎬 BoxCast: Hollywood Box Office Forecaster
 
-Forecasts a film's lifetime box office **before release** (worldwide), then
-sharpens the forecast **after each weekend** (domestic US + Canada).
-Updates itself every morning with films from TMDB.
+Type a film title and get its box office forecast: worldwide total, US opening
+weekend, US total, chance to break even, and what's driving the number. Once a film
+opens, enter its weekend grosses for a much sharper forecast.
 
 ---
 
@@ -47,7 +47,13 @@ Same steps, with file name `.streamlit/config.toml`, pasting the contents of
 3. Optional: choose a nice URL like `boxcast-yourname`.
 4. Click **Deploy**. The first start takes 2–4 minutes. You now have a live link!
 
-Everything works at this point except the **Upcoming releases** tab, which needs Step 5.
+**Step 4b: Switch on title search (needed for the app to work).**
+In share.streamlit.io, open your app's **⋮ menu → Settings → Secrets**, paste this line
+(with your own key from Step 5a) and click **Save**:
+```
+TMDB_API_KEY = "paste-your-tmdb-key-here"
+```
+The app restarts by itself, and typing a film title now works.
 
 ### Step 5: Turn on the daily automatic update
 **5a. Get your TMDB key.** On themoviedb.org: click your profile picture, then
@@ -65,7 +71,7 @@ Everything works at this point except the **Upcoming releases** tab, which needs
 enable workflows). Pick **Daily update** on the left, then **Run workflow → Run workflow**.
 After about 2 minutes you'll see a green tick ✅.
 
-Open your Streamlit app: the **Upcoming releases** tab is now full of real films.
+Open your Streamlit app: the **In cinemas and coming soon** strip now shows forecasts.
 From now on it updates **every morning at about 7:47 AM India time**, automatically.
 
 ---
@@ -76,20 +82,25 @@ From now on it updates **every morning at about 7:47 AM India time**, automatica
 | Streamlit shows "ModuleNotFoundError" | Check `requirements.txt` was uploaded to the main folder (not inside another folder). |
 | Streamlit says it can't find `app.py` | Your files went inside a subfolder. Main file path should then be e.g. `movie-forecast/app.py`. |
 | Daily update has a red ❌ | Click it to read the error. "401" means the TMDB key is wrong, so redo step 5b. "403 / permission denied" means redo step 5c. |
-| Upcoming tab still empty after a green tick | In Streamlit, click **⋮ → Reboot app**. |
+| Search says it isn't switched on | Add the key in Streamlit Secrets (Step 4b). |
+| "TMDB didn't respond" | The key in Streamlit Secrets is wrong or has extra spaces. Paste it again. |
+| Coming-soon strip still empty after a green tick | In Streamlit, click **⋮ → Reboot app**. |
 | Action stopped running after a few weeks | GitHub pauses schedules in quiet repositories. Go to Actions → Daily update → **Enable workflow**. |
 
 ---
 
 ## What's inside
 ```
-app.py                     the Streamlit app (all 6 tabs)
+app.py                     the app: search page, film page, how-it-works page
 requirements.txt           Python libraries the app needs
 src/features.py            turns movie info into model inputs (shared rules)
 src/build_datasets.py      downloads historical data and builds training tables
 src/train_models.py        trains the models and measures accuracy
 src/predict.py             loads the models and makes forecasts
+src/tmdb.py                talks to TMDB (title search, film details)
+src/style.py               the look: colours, fonts, layout
 src/fetch_tmdb.py          the daily update (TMDB → forecasts)
+static/fonts/              the Archivo font (open licence, OFL)
 data/                      training tables, test results, live forecasts
 models/                    the trained models + metrics.json (accuracy numbers)
 .github/workflows/         the daily-update robot

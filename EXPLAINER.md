@@ -63,6 +63,20 @@ a big opening, then roughly exponential decay. Word-of-mouth hits have a larger 
 slowly. Our multiplier and the weekend drops measure exactly this: a low drop means high *q*.
 *(Fitting a full Bass model per film is a good extension to mention.)*
 
+**Extra pre-release forecasts.** By matching films across both datasets (same title and
+year, 2,169 films), the same pre-release inputs also forecast the **US opening weekend**
+(typical error 45%) and the **US total** (53%).
+
+**"Why this number".** For each film the app splits the forecast into the contribution of
+each factor (budget, star, director, timing...) using the model's built-in feature
+contributions (the same idea as SHAP values). It starts from the typical film and shows
+how much each factor moves the forecast up or down.
+
+**Chance to break even.** A rule of thumb says a film needs about 2.5× its budget worldwide
+to break even (cinemas keep roughly half the ticket money, plus marketing costs). Treating
+the calibrated forecast range as a log-normal distribution gives the probability of
+clearing that bar.
+
 ## 5. How we tested it (very important in a viva)
 **Time-based split:** train on older films, test on newer films the model has never seen,
 exactly like forecasting a real future release. Random splits would be cheating, because the

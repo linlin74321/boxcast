@@ -11,6 +11,25 @@
     "ours_same_films_median_abs_pct_error": 55.6,
     "range_widen_log": 0.2895
   },
+  "pre_release_us": {
+    "test_period": "films released 2016-2019 (trained on 2000-2015)",
+    "opening_weekend": {
+      "films_tested": 431,
+      "median_abs_pct_error": 45.4,
+      "within_25pct": 26.2,
+      "within_50pct": 53.8,
+      "range_coverage": 84.7,
+      "range_widen_log": 0.3348
+    },
+    "domestic_total": {
+      "films_tested": 431,
+      "median_abs_pct_error": 53.2,
+      "within_25pct": 22.5,
+      "within_50pct": 47.3,
+      "range_coverage": 81.4,
+      "range_widen_log": 0.3277
+    }
+  },
   "post_release": {
     "test_period": "films released Jul 2022 - Aug 2024 (trained on 2000-Jun 2022)",
     "target": "domestic (US+Canada) lifetime gross",

@@ -163,6 +163,20 @@ def build_post_release(daily):
     return p.sort_values("release_date"), curves
 
 
+def build_pre_us(pre, post):
+    """Match films across both datasets (same title + year) so the pre-release
+    features can also predict US opening weekend and US total."""
+    import re
+    norm = lambda t: re.sub(r"[^a-z0-9]", "", str(t).lower())
+    a = pre.assign(key=pre["name"].map(norm) + pre["year"].astype(str))
+    b = post.assign(key=post["title"].map(norm) + post["year"].astype(str))
+    b = b.drop_duplicates("key")[["key", "w1", "lifetime", "theaters"]]
+    j = a.merge(b, on="key", how="inner").drop(columns="key")
+    j["log_w1"] = np.log(j["w1"])
+    j["log_dom"] = np.log(j["lifetime"])
+    return j
+
+
 if __name__ == "__main__":
     movies, daily = load_raw()
     pre, people = build_pre_release(movies)
@@ -171,5 +185,6 @@ if __name__ == "__main__":
     people.to_csv(OUT / "people_power.csv", index=False)
     post.to_csv(OUT / "post_release.csv", index=False)
     curves.to_csv(OUT / "curves.csv", index=False)
+    build_pre_us(pre, post).to_csv(OUT / "pre_us.csv", index=False)
     print(f"pre-release films: {len(pre):,}  people: {len(people):,}")
     print(f"post-release films: {len(post):,}")
