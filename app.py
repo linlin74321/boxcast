@@ -30,11 +30,45 @@ st.html(CSS)
 
 # ------------------------------------------------------------------ helpers
 def tmdb_key():
+    """Find the TMDB key in Streamlit Secrets, forgiving common pasting slips:
+    a different name (tmdb_key, TMDB API KEY...), a [section] header,
+    extra spaces or quotes, or a leading 'Bearer '."""
+    found = ""
     try:
-        key = st.secrets.get("TMDB_API_KEY", "")
+        def walk(d, word):
+            for k, v in d.items():
+                if hasattr(v, "items"):
+                    r = walk(v, word) or (walk(v, "") if word in str(k).lower() else "")
+                    if r:
+                        return r
+                elif word in str(k).lower():
+                    return str(v)
+            return ""
+        found = walk(st.secrets, "tmdb") or walk(st.secrets, "key")
     except Exception:
-        key = ""
-    return key or os.environ.get("TMDB_API_KEY", "")
+        found = ""
+    key = found or os.environ.get("TMDB_API_KEY", "")
+    key = key.strip().strip('"').strip("'").strip()
+    if key.lower().startswith("bearer "):
+        key = key[7:].strip()
+    return key
+
+
+def tmdb_problem(err):
+    """Turn a TMDB failure into a specific, fixable message."""
+    import requests
+    if isinstance(err, requests.HTTPError) and err.response is not None:
+        code = err.response.status_code
+        if code == 401:
+            return ("TMDB rejected the key (error 401). In Streamlit Secrets, paste the "
+                    "<b>API Key</b> from themoviedb.org → Settings → API (a 32-character code), "
+                    "save, and search again.")
+        if code == 404:
+            return "TMDB couldn't find that film (error 404). Go back and pick it again."
+        return f"TMDB returned error {code}. Wait a minute and search again."
+    if isinstance(err, requests.RequestException):
+        return f"Couldn't reach TMDB ({type(err).__name__}). Wait a minute and search again."
+    return f"Something went wrong talking to TMDB: {esc(type(err).__name__)}: {esc(str(err))[:200]}"
 
 
 KEY = tmdb_key()
@@ -163,9 +197,9 @@ def home():
         else:
             try:
                 results = search(query, KEY)
-            except Exception:
+            except Exception as err:
                 results = None
-                note("TMDB didn't respond. Check the TMDB key in Streamlit Secrets, then search again.")
+                note(tmdb_problem(err))
             if results == []:
                 note(f"No films match “{esc(query)}”. Check the spelling or try the original title.")
             elif results:
@@ -261,9 +295,8 @@ def film_page(movie_id):
         return
     try:
         d = details(movie_id, KEY)
-    except Exception:
-        note("This film couldn't be loaded from TMDB. Go back and pick it again, "
-             "or check the TMDB key in Streamlit Secrets.")
+    except Exception as err:
+        note(tmdb_problem(err))
         return
     f = film_features(d)
     if pd.isna(f["year"]):
